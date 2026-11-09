@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Connection Intelligence — search your LinkedIn network</title>
+  <meta name="description" content="Upload your LinkedIn connections and ask who in your network can help — in plain English." />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="modulepreload" href="js/app.js" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#" id="brand-home">
+        <span class="brand-mark">ci</span>
+        <span class="brand-name">Connection Intelligence</span>
+      </a>
+      <div class="topbar-right">
+        <span class="dataset-tag hidden" id="dataset-tag" title="Your dataset ID"></span>
+        <button class="btn-text hidden" id="btn-reset" type="button">Start over</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="shell">
+    <!-- Stepper -->
+    <ol class="stepper" id="stepper" aria-label="Progress">
+      <li data-step="1"><span class="dot">1</span><span class="label">Export from LinkedIn</span></li>
+      <li data-step="2"><span class="dot">2</span><span class="label">Upload your CSV</span></li>
+      <li data-step="3"><span class="dot">3</span><span class="label">Enrich your network</span></li>
+      <li data-step="4"><span class="dot">✓</span><span class="label">Ask questions</span></li>
+    </ol>
+
+    <!-- STEP 1: Guide -->
+    <section class="panel" id="view-1" data-view="1">
+      <div class="hero">
+        <h1>Find the right people in <span class="accent">your</span> network</h1>
+        <p class="lead">Ask things like <em>“who has Amazon experience and can mentor in software?”</em> and get ranked people from your own LinkedIn connections, with the reasons why.</p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span class="step-badge">Step 1</span>
+          <h2>Download your connections from LinkedIn</h2>
+          <p class="muted">Takes about 2 minutes, plus up to ~10 minutes for LinkedIn to prepare the file.</p>
+        </div>
+
+        <ol class="guide">
+          <li>
+            <div class="guide-num">1</div>
+            <div>
+              <h3>Open LinkedIn's “Download your data” page</h3>
+              <p>Sign in to LinkedIn on a computer, then open the page directly:</p>
+              <a class="btn btn-primary" href="https://www.linkedin.com/mypreferences/d/download-my-data" target="_blank" rel="noopener noreferrer">Open “Get a copy of your data” ↗</a>
+              <p class="hint">Or go there by hand: click your photo <b>Me ▾</b> (top right) → <b>Settings &amp; Privacy</b> → <b>Data privacy</b> (left menu) → <b>Get a copy of your data</b>.</p>
+            </div>
+          </li>
+          <li>
+            <div class="guide-num">2</div>
+            <div>
+              <h3>Select only “Connections”</h3>
+              <p>Choose <b>“Want something in particular? Select the data files you're most interested in.”</b> and tick <b>Connections</b>. This is much faster than the full archive.</p>
+              <div class="mock">
+                <div class="mock-row"><span class="radio"></span> Download larger data archive…</div>
+                <div class="mock-row on"><span class="radio on"></span> Want something in particular? Select the data files…</div>
+                <div class="mock-checks">
+                  <span class="check">Articles</span><span class="check on">✓ Connections</span><span class="check">Imported Contacts</span><span class="check">Messages</span><span class="check">Invitations</span><span class="check">Profile</span>
+                </div>
+                <div class="mock-btn">Request archive</div>
+              </div>
+            </div>
+          </li>
+          <li>
+            <div class="guide-num">3</div>
+            <div>
+              <h3>Click “Request archive” and confirm your password</h3>
+              <p>LinkedIn will email you when it's ready, usually within <b>10 minutes</b>.</p>
+            </div>
+          </li>
+          <li>
+            <div class="guide-num">4</div>
+            <div>
+              <h3>Download and unzip</h3>
+              <p>Use the link in the email, or go back to the same page and click <b>Download archive</b>. Unzip the file and find <code>Connections.csv</code>. That's the file you'll upload next.</p>
+              <p class="hint">Don't edit the file. The few “Notes” lines at the top are expected.</p>
+            </div>
+          </li>
+        </ol>
+
+        <div class="card-foot">
+          <span class="muted">Have <code>Connections.csv</code>?</span>
+          <button class="btn btn-primary" id="to-step-2" type="button">I have the file — continue</button>
+        </div>
+      </div>
+
+      <details class="card advanced">
+        <summary>Already enriched a dataset? Use its ID</summary>
+        <form id="form-existing" class="row">
+          <input id="existing-id" class="input" placeholder="e.g. b6101fe3-24d4-4d4a-a6df-26b96c8f2c09" autocomplete="off" spellcheck="false" />
+          <button class="btn btn-secondary" type="submit">Use this dataset</button>
+        </form>
+        <p class="error-text hidden" id="existing-error"></p>
+      </details>
+    </section>
+
+    <!-- STEP 2: Upload -->
+    <section class="panel hidden" id="view-2" data-view="2">
+      <div class="card">
+        <div class="card-head">
+          <span class="step-badge">Step 2</span>
+          <h2>Upload <code>Connections.csv</code></h2>
+          <p class="muted">We check the file in your browser first, then store it securely for enrichment.</p>
+        </div>
+
+        <label class="dropzone" id="dropzone" for="file-input">
+          <input type="file" id="file-input" accept=".csv,text/csv" hidden />
+          <div class="dz-icon" aria-hidden="true">⬆</div>
+          <p class="dz-title">Drag &amp; drop <b>Connections.csv</b> here</p>
+          <p class="muted">or <span class="link">browse your computer</span> · max 15 MB</p>
+        </label>
+
+        <div class="file-summary hidden" id="file-summary">
+          <div class="file-icon">CSV</div>
+          <div class="file-info">
+            <b id="file-name"></b>
+            <span class="muted" id="file-meta"></span>
+          </div>
+          <button class="btn-text" id="file-clear" type="button">Change</button>
+        </div>
+
+        <div class="field">
+          <label for="dataset-name">Name this network <span class="muted">(optional)</span></label>
+          <input id="dataset-name" class="input" maxlength="120" placeholder="e.g. My LinkedIn network — Nov 2026" />
+        </div>
+
+        <p class="error-text hidden" id="upload-error"></p>
+
+        <div class="card-foot">
+          <button class="btn btn-secondary" id="back-to-1" type="button">Back</button>
+          <button class="btn btn-primary" id="btn-upload" type="button" disabled>Upload &amp; start enrichment</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- STEP 3: Enrichment -->
+    <section class="panel hidden" id="view-3" data-view="3">
+      <div class="card enrich">
+        <div class="card-head">
+          <span class="step-badge">Step 3</span>
+          <h2 id="enrich-title">Enriching your network…</h2>
+          <p class="muted" id="enrich-sub">We're pulling each connection's experience, education and skills. Large networks can take several minutes. You can keep this tab open in the background.</p>
+        </div>
+
+        <div class="pulse-wrap" aria-hidden="true">
+          <div class="pulse"></div><div class="pulse p2"></div>
+          <div class="pulse-core">in</div>
+        </div>
+
+        <div class="progress"><div class="progress-bar" id="progress-bar"></div></div>
+        <div class="progress-meta">
+          <span id="progress-label">Starting…</span>
+          <span id="progress-elapsed">0:00</span>
+        </div>
+
+        <ul class="phases" id="phases">
+          <li data-phase="upload">CSV uploaded</li>
+          <li data-phase="import">Importing connections</li>
+          <li data-phase="enrich">Enriching profiles</li>
+          <li data-phase="index">Building the search index</li>
+          <li data-phase="ready">Ready for questions</li>
+        </ul>
+
+        <p class="error-text hidden" id="enrich-error"></p>
+        <div class="card-foot">
+          <span class="muted small">Dataset ID: <code id="enrich-dataset"></code></span>
+          <button class="btn btn-secondary hidden" id="btn-retry" type="button">Retry</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- STEP 4: Chat -->
+    <section class="panel hidden" id="view-4" data-view="4">
+      <div class="chat">
+        <div class="chat-log" id="chat-log" aria-live="polite"></div>
+        <div class="suggestions" id="suggestions">
+          <button class="chip" data-query="people with Amazon experience who can mentor in software">Amazon experience + can mentor</button>
+          <button class="chip" data-query="senior software engineers in Atlanta">Senior engineers in Atlanta</button>
+          <button class="chip" data-query="product managers at startups">PMs at startups</button>
+          <button class="chip" data-query="people who studied at Georgia Tech">Georgia Tech alumni</button>
+          <button class="chip" data-query="recruiters or hiring managers in tech">Recruiters in tech</button>
+        </div>
+        <form class="composer" id="composer">
+          <textarea id="question" rows="1" maxlength="1000" placeholder="Ask about your network… e.g. who can introduce me to someone at Google?" required></textarea>
+          <button class="btn btn-primary" id="btn-ask" type="submit">Ask</button>
+        </form>
+        <p class="muted small center">Each search reads your whole network, so it can take up to a minute.</p>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast hidden" id="toast" role="status"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
