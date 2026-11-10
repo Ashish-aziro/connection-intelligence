@@ -167,5 +167,6 @@ export function readProgress(status) {
   const done = pickNum(src, ["enriched", "completed", "done", "enriched_count", "completed_count", "succeeded"]);
   const failed = pickNum(src, ["failed", "failed_count", "errors"]);
   const pending = pickNum(src, ["pending", "queued", "pending_count", "queued_count", "remaining"]);
-  return { total, done, failed, pending, imported: status.profiles ?? null };
+  const processing = pickNum(src, ["processing", "in_progress", "running"]);
+  return { total, done, failed, pending, processing, imported: status.profiles ?? null };
 }

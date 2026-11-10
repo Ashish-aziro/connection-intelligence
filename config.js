@@ -17,7 +17,8 @@ export const CONFIG = {
   ENRICH_MAX_ATTEMPTS: 200,      // safety stop (~30+ min)
   // Stop calling Unified when progress hasn't moved for this long AND this many calls.
   // Each Unified call starts scraper runs, so a stuck loop wastes runs (or money).
-  STALL_AFTER_MS: 4 * 60 * 1000,
-  STALL_AFTER_CALLS: 4,
+  // A single Unified call can take ~80 s while it retries the last profiles, so be patient.
+  STALL_AFTER_MS: 10 * 60 * 1000,
+  STALL_AFTER_CALLS: 6,
   MAX_FILE_BYTES: 15 * 1024 * 1024,
 };

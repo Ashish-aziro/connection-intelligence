@@ -133,6 +133,14 @@
           <input id="dataset-name" class="input" maxlength="120" placeholder="e.g. My LinkedIn network — Nov 2026" />
         </div>
 
+        <label class="option">
+          <input type="checkbox" id="force-new" />
+          <span>
+            <b>Re-enrich from scratch</b>
+            <span class="muted">Off by default: if you've uploaded this same network before, we reuse the enriched copy instead of scraping LinkedIn again.</span>
+          </span>
+        </label>
+
         <p class="error-text hidden" id="upload-error"></p>
 
         <div class="card-foot">

@@ -37,6 +37,8 @@ function replyError(reply) {
 }
 
 function replyMessage(reply) {
+  // Unified's internal loop caps at 10 rounds per call; that just means "call again".
+  if (typeof reply === "string" && /maximum iteration count/i.test(reply)) return "Finishing the last profiles…";
   if (typeof reply === "string") return reply.replace(/\s+/g, " ").slice(0, 160);
   if (reply && typeof reply === "object") {
     return reply.message || reply.status_text || reply.progress_text || reply.state || reply.phase || "";
@@ -51,7 +53,8 @@ function createStallWatch() {
   let callsSinceChange = 0;
   return {
     observe(p) {
-      const k = p ? `${p.imported ?? ""}|${p.done ?? ""}|${p.failed ?? ""}` : null;
+      // pending/processing flips count as movement: a profile being retried is not a stall.
+      const k = p ? `${p.imported ?? ""}|${p.done ?? ""}|${p.failed ?? ""}|${p.pending ?? ""}|${p.processing ?? ""}` : null;
       if (k !== null && k !== key) { key = k; changedAt = Date.now(); callsSinceChange = 0; }
     },
     countCall() { callsSinceChange += 1; },
@@ -104,8 +107,8 @@ export function startEnrichment(datasetId, ui) {
     const done = lastProgress?.done ?? 0;
     const total = lastProgress?.total ?? "?";
     return `Enrichment has not moved for ${watch.minutes()} minutes (still ${done} of ${total} profiles), so we stopped retrying. ` +
-      "The most common cause is the Apify scraper's plan limit (\"free user item limit exceeded\" on its runs). " +
-      "Fix the Apify plan or token, then click Retry. Your upload is saved.";
+      "Click Retry to continue — your upload is saved. If it stops again, check the Apify runs for errors " +
+      "such as \"free user item limit exceeded\".";
   };
 
   const drive = async () => {

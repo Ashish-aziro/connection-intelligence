@@ -89,10 +89,16 @@ async function upload() {
   btn.innerHTML = `<span class="spinner light"></span> Uploading…`;
   showError("upload-error", "");
   try {
-    const res = await createDataset(selectedFile, $("dataset-name").value.trim());
+    const res = await createDataset(selectedFile, $("dataset-name").value.trim(), { forceNew: $("force-new").checked });
     setState({ datasetId: res.dataset_id, name: res.name, ready: false, step: 3 });
-    toast(`Uploaded ${Number(res.connections || 0).toLocaleString()} connections`);
-    beginEnrichment();
+    if (res.reused && res.already_enriched) {
+      toast(`Already enriched — reusing “${res.name}” (${Number(res.enriched || 0).toLocaleString()} profiles). No new scraping.`);
+    } else if (res.reused) {
+      toast(`You uploaded this network before — continuing that enrichment instead of starting over.`);
+    } else {
+      toast(`Uploaded ${Number(res.connections || 0).toLocaleString()} connections`);
+    }
+    beginEnrichment();   // an already-enriched dataset comes back "ready" on the first Unified call
   } catch (e) {
     showError("upload-error", e.message || "Upload failed. Please try again.");
   } finally {

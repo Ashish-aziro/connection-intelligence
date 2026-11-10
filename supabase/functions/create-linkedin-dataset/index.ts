@@ -4,9 +4,12 @@
  * Public helper for the Connection Intelligence website.
  *
  *   POST multipart/form-data  { file: Connections.csv, name?: string }
- *     → uploads the CSV to the "linkedin-csv-imports" bucket,
+ *     → if the same network (same set of profile URLs) was uploaded before, returns
+ *       that dataset instead: { ok, reused: true, already_enriched, dataset_id, ... }
+ *       (send force_new=1 to skip this and enrich from scratch)
+ *     → otherwise uploads the CSV to "linkedin-csv-imports" under web/fp-<fingerprint>/,
  *       creates a li_datasets row (status "created"),
- *       returns { ok: true, dataset_id, source_filename, source_bucket }
+ *       returns { ok: true, reused: false, dataset_id, source_filename, source_bucket }
  *
  *   POST application/json  { action: "status", dataset_id }
  *     → returns { ok: true, dataset, profiles, queue } for the progress screen
@@ -56,6 +59,75 @@ function countConnections(text: string) {
   return lines.slice(headerIdx + 1).filter((l) => l.trim().length > 0).length;
 }
 
+// ---------- re-upload detection ----------
+// Fingerprint = SHA-256 of the sorted, de-duplicated profile URLs. The same network
+// exported twice (or uploaded twice) gets the same fingerprint even if the notes
+// lines or row order differ.
+function profileUrls(text: string): string[] {
+  const found = text.match(/https?:\/\/(?:[a-z]{2,3}\.)?linkedin\.com\/in\/[^\s",]+/gi) ?? [];
+  const norm = found.map((u) =>
+    u.toLowerCase().replace(/^http:/, "https:").replace(/\/\/[a-z]{2,3}\.linkedin/, "//www.linkedin")
+      .split(/[?#]/)[0].replace(/\/+$/, ""));
+  return [...new Set(norm)].sort();
+}
+
+async function fingerprint(text: string): Promise<string> {
+  const urls = profileUrls(text);
+  const basis = urls.length ? urls.join("\n") : text.trim();
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(basis));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 40);
+}
+
+const fpFolder = (fp: string) => `web/fp-${fp}`;
+const LEGACY_MARKERS = "web/legacy-scanned";
+const LEGACY_SCAN_LIMIT = 25;
+
+type Db = ReturnType<typeof admin>;
+
+/** Index uploads made before fingerprinting existed (web/<id>.csv) — once per file. */
+async function indexLegacyUploads(db: Db) {
+  const { data: markers } = await db.storage.from(BUCKET).list(LEGACY_MARKERS, { limit: 1000 });
+  const scanned = new Set((markers ?? []).map((m) => m.name));
+  const { data: rows } = await db.from("li_datasets").select("id, source_filename")
+    .eq("source_bucket", BUCKET).like("source_filename", "web/%.csv").not("source_filename", "like", "web/fp-%")
+    .order("created_at", { ascending: false }).limit(LEGACY_SCAN_LIMIT);
+  for (const row of rows ?? []) {
+    if (scanned.has(row.id)) continue;
+    const { data: blob } = await db.storage.from(BUCKET).download(row.source_filename);
+    if (blob) {
+      const fp = await fingerprint(await blob.text());
+      await db.storage.from(BUCKET).upload(`${fpFolder(fp)}/${row.id}.ref`, new Blob([row.source_filename]), { upsert: true });
+    }
+    await db.storage.from(BUCKET).upload(`${LEGACY_MARKERS}/${row.id}`, new Blob([""]), { upsert: true });
+  }
+}
+
+async function queueStatus(db: Db, datasetId: string) {
+  const { data } = await db.rpc("get_linkedin_enrichment_queue_status", { p_dataset_id: datasetId });
+  const q = Array.isArray(data) ? data[0] : data;
+  const n = (k: string) => Number(q?.[k] ?? 0) || 0;
+  return { completed: n("completed"), failed: n("failed"), pending: n("pending"), processing: n("processing"), total: n("total") };
+}
+
+/** Best existing dataset for this fingerprint: a finished one first, else the furthest along. */
+async function findExisting(db: Db, fp: string) {
+  try { await indexLegacyUploads(db); } catch (e) { console.error(JSON.stringify({ stage: "LEGACY_INDEX", error: String(e) })); }
+  const { data: files } = await db.storage.from(BUCKET).list(fpFolder(fp), { limit: 100 });
+  const ids = [...new Set((files ?? []).map((f) => f.name.replace(/\.(csv|ref)$/i, "")).filter((id) => UUID_RE.test(id)))];
+  if (!ids.length) return null;
+
+  const { data: rows } = await db.from("li_datasets").select("id, name, created_at").in("id", ids);
+  let best: { id: string; name: string; done: boolean; score: number; q: Awaited<ReturnType<typeof queueStatus>> } | null = null;
+  for (const row of rows ?? []) {
+    const q = await queueStatus(db, row.id);
+    if (q.total === 0) continue; // never imported — not worth reusing
+    const done = q.pending === 0 && q.processing === 0 && q.completed > 0;
+    const score = (done ? 1e9 : 0) + q.completed;
+    if (!best || score > best.score) best = { id: row.id, name: row.name, done, score, q };
+  }
+  return best;
+}
+
 async function handleUpload(req: Request) {
   const form = await req.formData();
   const file = form.get("file");
@@ -76,10 +148,29 @@ async function handleUpload(req: Request) {
 
   const rawName = String(form.get("name") ?? "").trim().slice(0, MAX_NAME);
   const name = rawName || `LinkedIn Connections ${new Date().toISOString().slice(0, 10)}`;
+  const forceNew = ["1", "true", "yes", "on"].includes(String(form.get("force_new") ?? "").toLowerCase());
+
+  const db = admin();
+  const fp = await fingerprint(text);
+
+  if (!forceNew) {
+    const existing = await findExisting(db, fp);
+    if (existing) {
+      return json({
+        ok: true,
+        reused: true,
+        already_enriched: existing.done,
+        dataset_id: existing.id,
+        name: existing.name,
+        connections,
+        enriched: existing.q.completed,
+        unavailable: existing.q.failed,
+      });
+    }
+  }
 
   const datasetId = crypto.randomUUID();
-  const path = `web/${datasetId}.csv`;
-  const db = admin();
+  const path = `${fpFolder(fp)}/${datasetId}.csv`;
 
   const { error: upErr } = await db.storage.from(BUCKET).upload(path, new Blob([text], { type: "text/csv" }), {
     contentType: "text/csv",
@@ -103,7 +194,7 @@ async function handleUpload(req: Request) {
     return json({ ok: false, error: "Could not create the dataset. Please try again." }, 500);
   }
 
-  return json({ ok: true, dataset_id: datasetId, name, connections, source_filename: path, source_bucket: BUCKET });
+  return json({ ok: true, reused: false, dataset_id: datasetId, name, connections, source_filename: path, source_bucket: BUCKET });
 }
 
 async function handleStatus(datasetId: string) {

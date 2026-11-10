@@ -32,10 +32,11 @@ async function postJson(url, body, signal) {
 }
 
 /** Upload Connections.csv → { dataset_id, name, connections } */
-export async function createDataset(file, name) {
+export async function createDataset(file, name, { forceNew = false } = {}) {
   const form = new FormData();
   form.append("file", file);
   if (name) form.append("name", name);
+  if (forceNew) form.append("force_new", "1");
   const res = await fetch(CONFIG.DATASET_FN_URL, { method: "POST", body: form });
   const data = tryJson(await res.text());
   if (!res.ok || !data || data.ok !== true) {
