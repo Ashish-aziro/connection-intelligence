@@ -88,12 +88,14 @@ type Db = ReturnType<typeof admin>;
 async function indexLegacyUploads(db: Db) {
   const { data: markers } = await db.storage.from(BUCKET).list(LEGACY_MARKERS, { limit: 1000 });
   const scanned = new Set((markers ?? []).map((m) => m.name));
-  const { data: rows } = await db.from("li_datasets").select("id, source_filename")
-    .eq("source_bucket", BUCKET).like("source_filename", "web/%.csv").not("source_filename", "like", "web/fp-%")
+  // Any dataset with a stored CSV (either bucket) that wasn't uploaded under web/fp-*.
+  const { data: rows } = await db.from("li_datasets").select("id, source_filename, source_bucket")
+    .not("source_filename", "is", null).not("source_bucket", "is", null)
+    .not("source_filename", "like", "web/fp-%")
     .order("created_at", { ascending: false }).limit(LEGACY_SCAN_LIMIT);
   for (const row of rows ?? []) {
     if (scanned.has(row.id)) continue;
-    const { data: blob } = await db.storage.from(BUCKET).download(row.source_filename);
+    const { data: blob } = await db.storage.from(row.source_bucket).download(row.source_filename);
     if (blob) {
       const fp = await fingerprint(await blob.text());
       await db.storage.from(BUCKET).upload(`${fpFolder(fp)}/${row.id}.ref`, new Blob([row.source_filename]), { upsert: true });
