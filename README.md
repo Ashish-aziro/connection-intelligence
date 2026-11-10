@@ -1,4 +1,4 @@
-# Connection Intelligence
+# LinkedIn Connections Intelligence — by Aziro
 
 Upload your LinkedIn `Connections.csv`, let it enrich, then ask questions about your network in plain English.
 
