@@ -1,27 +1,46 @@
 import { CONFIG } from "../config.js";
-import { createDataset } from "./api.js";
+import { createDataset, myDatasets, rememberDataset, AuthRequiredError } from "./api.js";
 import { startEnrichment } from "./enrich.js";
 import { createChat } from "./chat.js";
+import { currentSession, onAuthChange, signOut } from "./auth.js";
+import { initLogin } from "./login.js";
+import { esc } from "./render.js";
 
 const $ = (id) => document.getElementById(id);
-const STORE = "ci.state.v1";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-let state = loadState();          // { step, datasetId, ready, name }
+// Per-user storage keys so two people on one browser never see each other's state.
+let STORE = "ci.state.v1";
+let state = { step: 1 };          // { step, datasetId, ready, name }
 let selectedFile = null;
 let stopEnrichment = null;
 let elapsedTimer = null;
+let chat = null;
+let user = null;
 
 function loadState() {
   try { return { step: 1, ...JSON.parse(localStorage.getItem(STORE) || "{}") }; } catch { return { step: 1 }; }
 }
 function setState(patch) {
   state = { ...state, ...patch };
-  localStorage.setItem(STORE, JSON.stringify(state));
+  try { localStorage.setItem(STORE, JSON.stringify(state)); } catch { /* storage blocked */ }
 }
 
 // ---------- views ----------
+function showAuthScreen(which = "view-auth") {
+  stopEnrichment?.();
+  clearInterval(elapsedTimer);
+  document.querySelectorAll("[data-view]").forEach((v) => v.classList.add("hidden"));
+  $("stepper").classList.add("hidden");
+  ["view-auth", "view-reset"].forEach((id) => $(id).classList.toggle("hidden", id !== which));
+  ["dataset-tag", "btn-reset", "user-menu"].forEach((id) => $(id).classList.add("hidden"));
+}
+
 function show(step) {
+  ["view-auth", "view-reset"].forEach((id) => $(id).classList.add("hidden"));
+  $("stepper").classList.remove("hidden");
+  $("user-menu").classList.toggle("hidden", !user);
+  if (step === 1) loadMyNetworks();
   document.querySelectorAll("[data-view]").forEach((v) => v.classList.toggle("hidden", Number(v.dataset.view) !== step));
   document.querySelectorAll("#stepper li").forEach((li) => {
     const n = Number(li.dataset.step);
@@ -100,6 +119,7 @@ async function upload() {
     }
     beginEnrichment();   // an already-enriched dataset comes back "ready" on the first Unified call
   } catch (e) {
+    if (e instanceof AuthRequiredError) return showAuthScreen();
     showError("upload-error", e.message || "Upload failed. Please try again.");
   } finally {
     btn.disabled = !selectedFile;
@@ -165,19 +185,38 @@ function beginEnrichment() {
 }
 
 // ---------- step 4: chat ----------
-const chat = createChat({
-  log: $("chat-log"),
-  form: $("composer"),
-  input: $("question"),
-  button: $("btn-ask"),
-  suggestions: $("suggestions"),
-  getDatasetId: () => state.datasetId,
-  storageKey: "ci.chat.v1",
-});
-
 function openChat() {
   show(4);
   chat.open();
+}
+
+// ---------- step 1: the signed-in user's networks ----------
+async function loadMyNetworks() {
+  const box = $("my-networks");
+  const list = $("network-list");
+  let items = [];
+  try { items = await myDatasets(); } catch (e) {
+    if (e instanceof AuthRequiredError) return showAuthScreen();
+    return box.classList.add("hidden");
+  }
+  box.classList.toggle("hidden", items.length === 0);
+  list.innerHTML = items.map((d) => {
+    const when = d.created_at ? new Date(d.created_at).toLocaleDateString() : "";
+    const status = d.ready
+      ? `<span class="pill pill-ready">Ready</span>`
+      : `<span class="pill pill-progress">${esc(d.enriched)} of ${esc(d.total)} enriched</span>`;
+    return `<li>
+      <div class="network-info"><b>${esc(d.name)}</b><span class="muted small">${esc(d.total)} connections · ${esc(when)}</span></div>
+      ${status}
+      <button class="btn ${d.ready ? "btn-primary" : "btn-secondary"} btn-sm" type="button"
+        data-open="${esc(d.id)}" data-name="${esc(d.name)}">${d.ready ? "Search" : "Continue"}</button>
+    </li>`;
+  }).join("");
+}
+
+function openNetwork(id, name) {
+  setState({ datasetId: id, name, ready: false, step: 3 });
+  beginEnrichment();   // a ready network comes back "ready" on the first Unified call → chat
 }
 
 // ---------- wiring ----------
@@ -185,11 +224,18 @@ function resetAll() {
   if (!confirm("Start over with a new CSV? Your current dataset stays saved in the database.")) return;
   stopEnrichment?.();
   clearInterval(elapsedTimer);
-  localStorage.removeItem(STORE);
+  try { localStorage.removeItem(STORE); } catch { /* storage blocked */ }
   chat.reset();
   state = { step: 1 };
   clearFile();
   show(1);
+}
+
+async function doSignOut() {
+  stopEnrichment?.();
+  await signOut();
+  try { sessionStorage.clear(); } catch { /* storage blocked */ }
+  location.reload();
 }
 
 function wire() {
@@ -212,12 +258,58 @@ function wire() {
     const id = $("existing-id").value.trim();
     if (!UUID_RE.test(id)) return showError("existing-error", "That isn't a valid dataset ID (UUID).");
     showError("existing-error", "");
+    rememberDataset(id).catch(() => {});   // add it to "Your networks" (best effort)
     setState({ datasetId: id, name: `Dataset ${id.slice(0, 8)}…`, ready: false, step: 3 });
     beginEnrichment();   // Unified returns "ready" immediately if it's already enriched
   });
+
+  $("network-list").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-open]");
+    if (b) openNetwork(b.dataset.open, b.dataset.name);
+  });
+  $("btn-signout").addEventListener("click", doSignOut);
 }
 
-wire();
-if (state.datasetId && state.ready) openChat();
-else if (state.datasetId) beginEnrichment();
-else show(state.step === 2 ? 2 : 1);
+// ---------- boot: nothing is shown until we know who is signed in ----------
+let started = false;
+
+function enterApp(session) {
+  if (started) return;
+  started = true;
+  user = session.user;
+  const email = user.email || "";
+  $("user-email").textContent = email;
+  $("user-avatar").textContent = (email[0] || "?").toUpperCase();
+  STORE = `ci.state.v1:${user.id}`;
+  state = loadState();
+  chat = createChat({
+    log: $("chat-log"),
+    form: $("composer"),
+    input: $("question"),
+    button: $("btn-ask"),
+    suggestions: $("suggestions"),
+    getDatasetId: () => state.datasetId,
+    storageKey: `ci.chat.v1:${user.id}`,
+  });
+  if (state.datasetId && state.ready) openChat();
+  else if (state.datasetId) beginEnrichment();
+  else show(state.step === 2 ? 2 : 1);
+}
+
+async function boot() {
+  wire();
+  initLogin({ onSignedIn: (session) => session && enterApp(session) });
+
+  onAuthChange((session, event) => {
+    if (event === "PASSWORD_RECOVERY") return showAuthScreen("view-reset");
+    if (session && !started) enterApp(session);
+    if (!session && started) location.reload();
+  });
+
+  if (/type=recovery/.test(location.hash)) return showAuthScreen("view-reset");
+  const session = await currentSession();
+  if (session) enterApp(session);
+  else showAuthScreen();
+}
+
+boot();

@@ -23,13 +23,75 @@
       <div class="topbar-right">
         <span class="dataset-tag hidden" id="dataset-tag" title="Your dataset ID"></span>
         <button class="btn-text hidden" id="btn-reset" type="button">Start over</button>
+        <div class="user-menu hidden" id="user-menu">
+          <span class="user-avatar" id="user-avatar" aria-hidden="true"></span>
+          <span class="user-email" id="user-email"></span>
+          <button class="btn-text" id="btn-signout" type="button">Sign out</button>
+        </div>
       </div>
     </div>
   </header>
 
   <main class="shell">
+    <!-- LOGIN -->
+    <section class="auth hidden" id="view-auth">
+      <div class="auth-hero">
+        <span class="eyebrow">LinkedIn Connections Intelligence</span>
+        <h1>Find the right people in <span class="accent">your</span> network</h1>
+        <p>Sign in with your email to upload your LinkedIn connections and search them in plain English.</p>
+        <ul class="auth-points">
+          <li>Export your connections from LinkedIn in 2 minutes</li>
+          <li>We enrich every profile with experience, education and skills</li>
+          <li>Ask questions like “who can mentor me in software at Amazon?”</li>
+        </ul>
+      </div>
+
+      <div class="card auth-card">
+        <div class="auth-tabs" role="tablist">
+          <button type="button" role="tab" class="auth-tab active" data-mode="signin" aria-selected="true">Sign in</button>
+          <button type="button" role="tab" class="auth-tab" data-mode="signup" aria-selected="false">Create account</button>
+        </div>
+
+        <form id="auth-form" novalidate>
+          <h2 id="auth-title">Welcome back</h2>
+          <p class="muted" id="auth-sub">Sign in with your email and password.</p>
+
+          <div class="field">
+            <label for="auth-email">Email</label>
+            <input id="auth-email" class="input" type="email" autocomplete="email" placeholder="you@company.com" required />
+          </div>
+          <div class="field" id="auth-password-field">
+            <label for="auth-password">Password</label>
+            <input id="auth-password" class="input" type="password" autocomplete="current-password" minlength="6" placeholder="At least 6 characters" required />
+          </div>
+
+          <p class="error-text hidden" id="auth-error"></p>
+          <p class="auth-info hidden" id="auth-info"></p>
+
+          <button class="btn btn-primary btn-block" id="auth-submit" type="submit">Sign in</button>
+          <button class="btn-text auth-forgot" id="auth-forgot" type="button">Forgot password?</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- SET NEW PASSWORD (after a reset-password email link) -->
+    <section class="auth hidden" id="view-reset">
+      <div class="card auth-card auth-card-solo">
+        <form id="reset-form" novalidate>
+          <h2>Set a new password</h2>
+          <p class="muted">Choose a new password for your account.</p>
+          <div class="field">
+            <label for="reset-password">New password</label>
+            <input id="reset-password" class="input" type="password" autocomplete="new-password" minlength="6" required />
+          </div>
+          <p class="error-text hidden" id="reset-error"></p>
+          <button class="btn btn-primary btn-block" type="submit">Save password</button>
+        </form>
+      </div>
+    </section>
+
     <!-- Stepper -->
-    <ol class="stepper" id="stepper" aria-label="Progress">
+    <ol class="stepper hidden" id="stepper" aria-label="Progress">
       <li data-step="1"><span class="dot">1</span><span class="label">Export from LinkedIn</span></li>
       <li data-step="2"><span class="dot">2</span><span class="label">Upload your CSV</span></li>
       <li data-step="3"><span class="dot">3</span><span class="label">Enrich your network</span></li>
@@ -37,7 +99,7 @@
     </ol>
 
     <!-- STEP 1: Guide -->
-    <section class="panel" id="view-1" data-view="1">
+    <section class="panel hidden" id="view-1" data-view="1">
       <div class="hero">
         <span class="eyebrow">LinkedIn Connections Intelligence</span>
         <h1>Find the right people in <span class="accent">your</span> network</h1>
@@ -97,6 +159,15 @@
           <span class="muted">Have <code>Connections.csv</code>?</span>
           <button class="btn btn-primary" id="to-step-2" type="button">I have the file — continue</button>
         </div>
+      </div>
+
+      <div class="card my-networks hidden" id="my-networks">
+        <div class="card-head">
+          <span class="step-badge">Your networks</span>
+          <h2>Pick up where you left off</h2>
+          <p class="muted">Networks you've uploaded with this account. Ready ones open straight into search.</p>
+        </div>
+        <ul class="network-list" id="network-list"></ul>
       </div>
 
       <details class="card advanced">

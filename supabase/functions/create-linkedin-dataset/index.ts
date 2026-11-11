@@ -13,6 +13,12 @@
  *
  *   POST application/json  { action: "status", dataset_id }
  *     → returns { ok: true, dataset, profiles, queue } for the progress screen
+ *   POST application/json  { action: "results", run_id, bucket: "best"|"near", offset, limit }
+ *     → every scored profile of a 05A search run, in 05A's rank order ("Load more")
+ *   POST application/json  { action: "my_datasets" } / { action: "remember", dataset_id }
+ *     → the signed-in user's networks (kept in their Auth app_metadata)
+ *
+ * All actions require a signed-in Supabase Auth user: Authorization: Bearer <access_token>.
  *
  * Deploy with JWT verification OFF (the website calls it without a login):
  *   supabase functions deploy create-linkedin-dataset --no-verify-jwt
@@ -199,6 +205,99 @@ async function handleUpload(req: Request) {
   return json({ ok: true, reused: false, dataset_id: datasetId, name, connections, source_filename: path, source_bucket: BUCKET });
 }
 
+// ---------- signed-in user ----------
+type AuthUser = { id: string; email?: string; app_metadata?: Record<string, unknown> };
+const MAX_REMEMBERED = 50;
+
+/** The Supabase Auth user behind the request's bearer token, or null. */
+async function requireUser(req: Request, db: Db): Promise<AuthUser | null> {
+  const auth = req.headers.get("authorization") ?? "";
+  const token = auth.replace(/^bearer\s+/i, "").trim();
+  if (!token || token.startsWith("sb_")) return null; // API keys are not user sessions
+  const { data, error } = await db.auth.getUser(token);
+  if (error || !data?.user) return null;
+  return data.user as AuthUser;
+}
+
+/** Remember which datasets a user uploaded/used (server-only app_metadata). */
+async function rememberDataset(db: Db, user: AuthUser, datasetId: string) {
+  const current = Array.isArray(user.app_metadata?.datasets) ? (user.app_metadata!.datasets as string[]) : [];
+  const next = [datasetId, ...current.filter((d) => d !== datasetId)].slice(0, MAX_REMEMBERED);
+  const { error } = await db.auth.admin.updateUserById(user.id, { app_metadata: { ...user.app_metadata, datasets: next } });
+  if (error) console.error(JSON.stringify({ stage: "REMEMBER_DATASET", error: error.message }));
+}
+
+async function handleMyDatasets(db: Db, user: AuthUser) {
+  const ids = Array.isArray(user.app_metadata?.datasets) ? (user.app_metadata!.datasets as string[]).filter((d) => UUID_RE.test(d)) : [];
+  if (!ids.length) return json({ ok: true, datasets: [] });
+  const { data: rows } = await db.from("li_datasets").select("id, name, created_at").in("id", ids);
+  const byId = new Map((rows ?? []).map((r) => [r.id, r]));
+  const datasets = [];
+  for (const id of ids) {
+    const row = byId.get(id);
+    if (!row) continue;
+    const q = await queueStatus(db, id);
+    datasets.push({ ...row, total: q.total, enriched: q.completed, unavailable: q.failed,
+      ready: q.total > 0 && q.pending === 0 && q.processing === 0 && q.completed > 0 });
+  }
+  return json({ ok: true, datasets });
+}
+
+// ---------- paging through every result of a search run ----------
+const MAX_PAGE = 200;
+
+async function handleResults(db: Db, body: Record<string, unknown>) {
+  const runId = String(body.run_id ?? "").trim();
+  const bucket = String(body.bucket ?? "").trim();
+  const offset = Math.max(0, Math.floor(Number(body.offset ?? 0)) || 0);
+  const limit = Math.min(MAX_PAGE, Math.max(1, Math.floor(Number(body.limit ?? 25)) || 25));
+  if (!UUID_RE.test(runId)) return json({ ok: false, error: "run_id must be a valid UUID." }, 400);
+  if (bucket !== "best" && bucket !== "near") return json({ ok: false, error: "bucket must be best or near." }, 400);
+
+  // Same ordering 05A uses: rank_in_bucket within final_bucket.
+  const { data: rows, error, count } = await db.from("search_results")
+    .select("profile_id, rank_in_bucket, final_score, rule_score, llm_verdict, llm_reason, relaxations, evidence", { count: "exact" })
+    .eq("run_id", runId).eq("final_bucket", bucket)
+    .order("rank_in_bucket", { ascending: true })
+    .range(offset, offset + limit - 1);
+  if (error) {
+    console.error(JSON.stringify({ stage: "RESULTS", error: error.message }));
+    return json({ ok: false, error: "Could not load more results." }, 500);
+  }
+
+  const ids = (rows ?? []).map((r) => r.profile_id);
+  const { data: feats } = ids.length
+    ? await db.from("li_profile_features")
+        .select("profile_id, full_name, linkedin_url, current_title, current_company, location_text, seniority_label, years_experience")
+        .in("profile_id", ids)
+    : { data: [] };
+  const f = new Map((feats ?? []).map((x) => [x.profile_id, x]));
+
+  const items = (rows ?? []).map((r) => {
+    const p = f.get(r.profile_id) ?? {};
+    const evidence = Object.values((r.evidence ?? {}) as Record<string, { st?: string; txt?: string }>)
+      .filter((v) => v && v.st !== "na" && v.txt).map((v) => v.txt);
+    return {
+      rank: r.rank_in_bucket,
+      profile_id: r.profile_id,
+      full_name: p.full_name ?? null,
+      linkedin_url: p.linkedin_url ?? null,
+      current_title: p.current_title ?? null,
+      current_company: p.current_company ?? null,
+      location: p.location_text ?? null,
+      seniority: p.seniority_label ?? null,
+      years_experience: p.years_experience ?? null,
+      score: r.final_score ?? r.rule_score,
+      llm_verdict: r.llm_verdict,
+      llm_reason: r.llm_reason,
+      relaxations: r.relaxations ?? [],
+      evidence,
+    };
+  });
+
+  return json({ ok: true, run_id: runId, bucket, offset, limit, total: count ?? null, items });
+}
+
 async function handleStatus(datasetId: string) {
   if (!UUID_RE.test(datasetId)) return json({ ok: false, error: "dataset_id must be a valid UUID." }, 400);
   const db = admin();
@@ -226,12 +325,33 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ ok: false, error: "Use POST." }, 405);
 
   try {
+    // Every action needs a signed-in user (Supabase Auth session token as Bearer).
+    const db = admin();
+    const user = await requireUser(req, db);
+    if (!user) return json({ ok: false, error: "Please sign in to continue.", code: "AUTH_REQUIRED" }, 401);
+
     const type = req.headers.get("content-type") ?? "";
-    if (type.includes("multipart/form-data")) return await handleUpload(req);
+    if (type.includes("multipart/form-data")) {
+      const res = await handleUpload(req);
+      if (res.ok) {
+        const body = await res.clone().json().catch(() => null);
+        if (body?.dataset_id) await rememberDataset(db, user, body.dataset_id);
+      }
+      return res;
+    }
 
     const body = await req.json().catch(() => null);
-    if (body && body.action === "status") return await handleStatus(String(body.dataset_id ?? "").trim());
-    return json({ ok: false, error: "Send a CSV (multipart) or {action:'status', dataset_id}." }, 400);
+    const action = body?.action;
+    if (action === "status") return await handleStatus(String(body.dataset_id ?? "").trim());
+    if (action === "results") return await handleResults(db, body);
+    if (action === "my_datasets") return await handleMyDatasets(db, user);
+    if (action === "remember") {
+      const id = String(body.dataset_id ?? "").trim();
+      if (!UUID_RE.test(id)) return json({ ok: false, error: "dataset_id must be a valid UUID." }, 400);
+      await rememberDataset(db, user, id);
+      return json({ ok: true });
+    }
+    return json({ ok: false, error: "Unknown action. Use status, results, my_datasets, remember, or upload a CSV." }, 400);
   } catch (err) {
     console.error(JSON.stringify({ stage: "UNHANDLED", error: String(err) }));
     return json({ ok: false, error: "Unexpected server error." }, 500);

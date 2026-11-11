@@ -6,6 +6,13 @@ export const CONFIG = {
   // 05A search flow. Called once per question.
   SEARCH_URL: "https://apex.aziro.ai/apexflow/api/v1/prediction/407a121d-d5e9-4b53-8c35-4a760ee3b87b",
 
+  // Supabase project + its PUBLISHABLE key (safe in the browser by design) for email login.
+  SUPABASE_URL: "https://jkuchkrbwxpoozcyarzt.supabase.co",
+  SUPABASE_PUBLISHABLE_KEY: "sb_publishable_YQy5tBojdLndPgwkzCC5Fw_fCWfFnFv",
+
+  // "Load more" page size for best fits / near matches.
+  RESULTS_PAGE_SIZE: 25,
+
   // Supabase edge function that stores the CSV and creates the li_datasets row.
   DATASET_FN_URL: "https://jkuchkrbwxpoozcyarzt.supabase.co/functions/v1/create-linkedin-dataset",
 

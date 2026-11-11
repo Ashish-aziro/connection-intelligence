@@ -68,20 +68,65 @@ function personCard(p, kind) {
   </article>`;
 }
 
-function section(title, rows, total, kind) {
-  const list = Array.isArray(rows) ? rows : [];
+/** "Load more" controls; the chat module wires the clicks. */
+export function loadMoreHtml(runId, kind, shown, total, pageSize) {
+  const left = Number(total) - shown;
+  if (!runId || !(left > 0)) return "";
+  const next = Math.min(pageSize, left);
   return `
-  <section class="result-section">
+    <div class="load-more" data-run="${esc(runId)}" data-bucket="${esc(kind)}" data-shown="${shown}" data-total="${esc(total)}">
+      <button class="btn btn-secondary btn-sm" type="button" data-load="page">Load ${next} more</button>
+      ${left > next ? `<button class="btn-text" type="button" data-load="all">Show all ${esc(left)} remaining</button>` : ""}
+    </div>`;
+}
+
+export function peopleHtml(rows, kind) {
+  return (rows || []).map((p) => personCard(p, kind)).join("");
+}
+
+function section(title, rows, total, kind, runId, pageSize) {
+  const list = Array.isArray(rows) ? rows : [];
+  const all = Number(total ?? list.length);
+  return `
+  <section class="result-section" data-bucket="${kind}">
     <header class="result-section-head">
       <h3>${esc(title)}</h3>
-      <span class="count">showing ${list.length} of ${esc(total ?? list.length)}</span>
+      <span class="count">showing <b class="shown">${list.length}</b> of ${esc(all)}</span>
     </header>
-    ${list.length ? `<div class="people">${list.map((p) => personCard(p, kind)).join("")}</div>`
+    ${list.length ? `<div class="people">${peopleHtml(list, kind)}</div>`
                   : `<p class="muted">No ${kind === "near" ? "near matches" : "best fits"} for this search.</p>`}
+    ${loadMoreHtml(runId, kind, list.length, all, pageSize)}
   </section>`;
 }
 
-export function renderResult(r) {
+// Same wording 05A's "Format Search Results" uses for relaxed rules.
+const RELAX_LABEL = {
+  past_role: "did this role before", past_company: "worked there before", adjacent_role: "related role",
+  role_in_description: "role only mentioned in descriptions", role_in_headline: "role only in headline, not in current title",
+  seniority_off: "different seniority", seniority_by_years: "no level in title, but many years",
+  nearby_geo: "nearby location", past_location: "worked in the area before",
+  works_in_area: "current job is in the area, but lives elsewhere", location_region_only: "only state given",
+  fewer_years: "fewer years", related_skill: "related skill", related_education: "related school/field",
+  still_current: "still in the role", student_or_intern: "student / intern",
+  semantic_intent: "similar profile (meaning-based)", llm_demoted: "reviewed: partial fit",
+};
+
+/** Map a raw search_results row (from the "results" action) to the same card shape 05A returns. */
+export function shapeExtraRow(x, kind) {
+  const relax = (x.relaxations || []).filter((r) => r !== "llm_promoted").map((r) => RELAX_LABEL[r] || r);
+  const item = {
+    rank: x.rank, name: x.full_name, linkedin_url: x.linkedin_url, title: x.current_title,
+    company: x.current_company, location: x.location, seniority: x.seniority,
+    years_experience: x.years_experience, score: x.score,
+    why: x.llm_reason || (x.evidence || []).slice(0, 3).join("; "),
+    evidence: x.evidence || [],
+  };
+  if (kind === "near") item.gap = relax.join(", ");
+  else if (relax.length) item.note = relax.join(", ");
+  return item;
+}
+
+export function renderResult(r, pageSize = 25) {
   if (typeof r === "string") return `<div class="md">${renderMarkdown(r)}</div>`;
   if (!r || typeof r !== "object") return `<p class="error-text">The search returned nothing readable.</p>`;
   if (r.ok === false) return `<p class="error-text">Search failed: ${esc(r.error || r.message || "unknown error")}</p>`;
@@ -100,8 +145,8 @@ export function renderResult(r) {
   <div class="result">
     ${r.interpreted_goal ? `<p class="goal">${esc(r.interpreted_goal)}</p>` : ""}
     <div class="stats">${stats}</div>
-    ${section("Best fits", r.best_fit, t.best_fit_total, "best")}
-    ${section("Near matches", r.near_matches, t.near_match_total, "near")}
+    ${section("Best fits", r.best_fit, t.best_fit_total, "best", r.run_id, pageSize)}
+    ${section("Near matches", r.near_matches, t.near_match_total, "near", r.run_id, pageSize)}
     ${next.length ? `<div class="next"><span>Try next:</span>${next.map((s) => {
       const q = typeof s === "string" ? s : s.query;
       const why = typeof s === "string" ? "" : s.reason;

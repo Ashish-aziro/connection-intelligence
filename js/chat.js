@@ -1,5 +1,6 @@
-import { search } from "./api.js";
-import { esc, renderResult } from "./render.js";
+import { CONFIG } from "../config.js";
+import { search, moreResults } from "./api.js";
+import { esc, renderResult, peopleHtml, loadMoreHtml, shapeExtraRow } from "./render.js";
 
 const THINKING_STEPS = [
   "Understanding your question…",
@@ -51,8 +52,10 @@ export function createChat({ log, form, input, button, suggestions, getDatasetId
 
     try {
       const result = await search(getDatasetId(), q);
-      const html = renderResult(result);
-      pending.querySelector(".bubble").innerHTML = html;
+      const html = renderResult(result, CONFIG.RESULTS_PAGE_SIZE);
+      const bubble = pending.querySelector(".bubble");
+      bubble.innerHTML = html;
+      bubble.dataset.hidx = String(history.length);
       history.push({ q, html });
       saveHistory();
     } catch (e) {
@@ -73,19 +76,63 @@ export function createChat({ log, form, input, button, suggestions, getDatasetId
   function autosize() { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 160) + "px"; }
   input.addEventListener("input", autosize);
 
-  // Chips (suggestions, "Try next") and retry buttons, anywhere in the chat
+  // "Load more" / "Show all": page through every result of that search run.
+  async function loadMore(box, all) {
+    if (box.dataset.busy) return;
+    box.dataset.busy = "1";
+    const section = box.closest(".result-section");
+    const bucket = box.dataset.bucket;
+    const runId = box.dataset.run;
+    const total = Number(box.dataset.total);
+    let shown = Number(box.dataset.shown);
+    const pageSize = CONFIG.RESULTS_PAGE_SIZE;
+    box.innerHTML = `<span class="thinking"><span class="spinner"></span> Loading more…</span>`;
+    try {
+      let list = section.querySelector(".people");
+      if (!list) { list = document.createElement("div"); list.className = "people"; box.before(list); }
+      do {
+        const want = all ? Math.min(200, total - shown) : Math.min(pageSize, total - shown);
+        const page = await moreResults(runId, bucket, shown, want);
+        const items = (page.items || []).map((x) => shapeExtraRow(x, bucket));
+        if (!items.length) break;
+        list.insertAdjacentHTML("beforeend", peopleHtml(items, bucket));
+        shown += items.length;
+        section.querySelector(".shown").textContent = String(shown);
+      } while (all && shown < total);
+      box.outerHTML = loadMoreHtml(runId, bucket, shown, total, pageSize) || "";
+    } catch (e) {
+      box.innerHTML = `<span class="error-text">Couldn't load more: ${esc(e.message || "network error")}</span>
+        <button class="btn-text" type="button" data-load="page">Try again</button>`;
+      box.dataset.shown = String(shown);
+      delete box.dataset.busy;
+      return;
+    }
+    // keep the restored chat (after a refresh) in sync with what's on screen
+    const bubble = section.closest(".bubble");
+    const idx = Number(bubble?.dataset.hidx);
+    if (bubble && Number.isInteger(idx) && history[idx]) { history[idx].html = bubble.innerHTML; saveHistory(); }
+  }
+
+  // Chips (suggestions, "Try next"), retry and load-more buttons, anywhere in the chat
   document.addEventListener("click", (e) => {
     const chip = e.target.closest("[data-query]");
     if (chip && chip.closest("#view-4")) { ask(chip.dataset.query); return; }
     const retry = e.target.closest("[data-retry]");
-    if (retry) ask(retry.dataset.retry);
+    if (retry) { ask(retry.dataset.retry); return; }
+    const more = e.target.closest("[data-load]");
+    if (more && more.closest(".load-more")) loadMore(more.closest(".load-more"), more.dataset.load === "all");
   });
 
   return {
     open() {
       if (log.childElementCount) return;
       welcome();
-      for (const h of history) { addBubble("user", esc(h.q)); addBubble("bot", h.html); }
+      history.forEach((h, i) => {
+        addBubble("user", esc(h.q));
+        const b = addBubble("bot", h.html).querySelector(".bubble");
+        b.dataset.hidx = String(i);
+        b.querySelectorAll(".load-more").forEach((x) => delete x.dataset.busy);
+      });
       if (history.length) suggestions.classList.add("hidden");
       input.focus();
     },
