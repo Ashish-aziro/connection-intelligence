@@ -17,6 +17,8 @@
  *     → every scored profile of a 05A search run, in 05A's rank order ("Load more")
  *   POST application/json  { action: "my_datasets" } / { action: "remember", dataset_id }
  *     → the signed-in user's networks (kept in their Auth app_metadata)
+ *   POST application/json  { action: "earlier_uploads" }
+ *     → networks with profiles that no other user has in their list (to add by name)
  *
  * All actions require a signed-in Supabase Auth user: Authorization: Bearer <access_token>.
  *
@@ -243,6 +245,38 @@ async function handleMyDatasets(db: Db, user: AuthUser) {
   return json({ ok: true, datasets });
 }
 
+/**
+ * Networks uploaded before logins existed (or by nobody signed in): datasets with
+ * imported profiles that no user has in their list yet. A user can add one to
+ * their own list ("remember"), after which it no longer appears here for others.
+ */
+async function handleEarlierUploads(db: Db, user: AuthUser) {
+  const claimed = new Set<string>();
+  for (let page = 1; page <= 20; page++) {
+    const { data, error } = await db.auth.admin.listUsers({ page, perPage: 200 });
+    if (error) { console.error(JSON.stringify({ stage: "LIST_USERS", error: error.message })); break; }
+    for (const u of data.users) {
+      if (u.id === user.id) continue;
+      const ds = (u.app_metadata as Record<string, unknown> | undefined)?.datasets;
+      if (Array.isArray(ds)) ds.forEach((d) => claimed.add(String(d)));
+    }
+    if (data.users.length < 200) break;
+  }
+  const mine = new Set(Array.isArray(user.app_metadata?.datasets) ? (user.app_metadata!.datasets as string[]) : []);
+
+  const { data: rows } = await db.from("li_datasets").select("id, name, created_at")
+    .order("created_at", { ascending: false }).limit(100);
+  const out = [];
+  for (const row of rows ?? []) {
+    if (claimed.has(row.id) || mine.has(row.id)) continue;
+    const q = await queueStatus(db, row.id);
+    if (q.total === 0) continue; // empty test datasets
+    out.push({ ...row, total: q.total, enriched: q.completed, unavailable: q.failed,
+      ready: q.pending === 0 && q.processing === 0 && q.completed > 0 });
+  }
+  return json({ ok: true, datasets: out });
+}
+
 // ---------- paging through every result of a search run ----------
 const MAX_PAGE = 200;
 
@@ -345,6 +379,7 @@ Deno.serve(async (req) => {
     if (action === "status") return await handleStatus(String(body.dataset_id ?? "").trim());
     if (action === "results") return await handleResults(db, body);
     if (action === "my_datasets") return await handleMyDatasets(db, user);
+    if (action === "earlier_uploads") return await handleEarlierUploads(db, user);
     if (action === "remember") {
       const id = String(body.dataset_id ?? "").trim();
       if (!UUID_RE.test(id)) return json({ ok: false, error: "dataset_id must be a valid UUID." }, 400);

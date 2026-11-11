@@ -1,5 +1,5 @@
 import { CONFIG } from "../config.js";
-import { createDataset, myDatasets, rememberDataset, AuthRequiredError } from "./api.js";
+import { createDataset, myDatasets, rememberDataset, earlierUploads, getStatus, AuthRequiredError } from "./api.js";
 import { startEnrichment } from "./enrich.js";
 import { createChat } from "./chat.js";
 import { currentSession, onAuthChange, signOut } from "./auth.js";
@@ -7,7 +7,6 @@ import { initLogin } from "./login.js";
 import { esc } from "./render.js";
 
 const $ = (id) => document.getElementById(id);
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Per-user storage keys so two people on one browser never see each other's state.
 let STORE = "ci.state.v1";
@@ -47,11 +46,30 @@ function show(step) {
     li.classList.toggle("active", n === step);
     li.classList.toggle("done", n < step);
   });
-  const hasDataset = Boolean(state.datasetId);
+  const hasDataset = Boolean(state.datasetId) && step > 1;
   $("dataset-tag").classList.toggle("hidden", !hasDataset);
   $("btn-reset").classList.toggle("hidden", !hasDataset && step < 2);
-  if (hasDataset) $("dataset-tag").textContent = state.name || `Dataset ${state.datasetId.slice(0, 8)}…`;
+  if (hasDataset) $("dataset-tag").textContent = displayName();
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+// The network's name for the header; never show a raw ID.
+function displayName() {
+  const n = String(state.name || "");
+  return n && !/^Dataset [0-9a-f]{8}/i.test(n) ? n : "Your network";
+}
+
+/** Fetch the real name from the server (older saved state may only have an ID). */
+function refreshName() {
+  if (!state.datasetId) return;
+  getStatus(state.datasetId).then((s) => {
+    const name = s?.dataset?.name;
+    if (name && name !== state.name) {
+      setState({ name });
+      $("dataset-tag").textContent = displayName();
+      $("enrich-dataset").textContent = displayName();
+    }
+  }).catch(() => {});
 }
 
 function toast(msg) {
@@ -140,7 +158,8 @@ function markPhase(phase) {
 
 function beginEnrichment() {
   show(3);
-  $("enrich-dataset").textContent = state.datasetId;
+  refreshName();
+  $("enrich-dataset").textContent = displayName();
   $("enrich-title").textContent = "Enriching your network…";
   $("view-3").querySelector(".enrich").classList.remove("stalled");
   document.querySelectorAll("#phases li.failed").forEach((li) => li.classList.remove("failed"));
@@ -190,33 +209,86 @@ function openChat() {
   chat.open();
 }
 
-// ---------- step 1: the signed-in user's networks ----------
+// ---------- home: the signed-in user's networks as tiles ----------
+const TILE_COLORS = ["#0a2540", "#2b50a1", "#fe6900", "#13315c", "#057642", "#5f4b8b"];
+function tileColor(name) {
+  let h = 0;
+  for (const ch of String(name || "")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return TILE_COLORS[h % TILE_COLORS.length];
+}
+const NETWORK_ICON = `<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+  <circle cx="12" cy="6" r="2.6"/><circle cx="5.5" cy="17" r="2.6"/><circle cx="18.5" cy="17" r="2.6"/>
+  <path d="M10.7 8.3 6.8 14.7M13.3 8.3l3.9 6.4M8.1 17h7.8"/></svg>`;
+
+function fmtDate(iso) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function networkTile(d, { action = "open" } = {}) {
+  const status = d.ready
+    ? `<span class="pill pill-ready">Ready to search</span>`
+    : `<span class="pill pill-progress">${esc(d.enriched)} of ${esc(d.total)} enriched</span>`;
+  const attr = action === "add" ? "data-add" : "data-open";
+  return `<button class="network-tile" type="button" ${attr}="${esc(d.id)}" data-name="${esc(d.name)}" title="${esc(d.name)}">
+      <span class="net-icon" style="background:${tileColor(d.name)}">${NETWORK_ICON}</span>
+      <span class="net-body">
+        <span class="net-name">${esc(d.name)}</span>
+        <span class="net-meta">${esc(Number(d.total).toLocaleString())} connections · ${esc(fmtDate(d.created_at))}</span>
+        ${status}
+      </span>
+      <span class="net-go" aria-hidden="true">${action === "add" ? "+" : "→"}</span>
+    </button>`;
+}
+
 async function loadMyNetworks() {
   const box = $("my-networks");
-  const list = $("network-list");
   let items = [];
   try { items = await myDatasets(); } catch (e) {
     if (e instanceof AuthRequiredError) return showAuthScreen();
     return box.classList.add("hidden");
   }
   box.classList.toggle("hidden", items.length === 0);
-  list.innerHTML = items.map((d) => {
-    const when = d.created_at ? new Date(d.created_at).toLocaleDateString() : "";
-    const status = d.ready
-      ? `<span class="pill pill-ready">Ready</span>`
-      : `<span class="pill pill-progress">${esc(d.enriched)} of ${esc(d.total)} enriched</span>`;
-    return `<li>
-      <div class="network-info"><b>${esc(d.name)}</b><span class="muted small">${esc(d.total)} connections · ${esc(when)}</span></div>
-      ${status}
-      <button class="btn ${d.ready ? "btn-primary" : "btn-secondary"} btn-sm" type="button"
-        data-open="${esc(d.id)}" data-name="${esc(d.name)}">${d.ready ? "Search" : "Continue"}</button>
-    </li>`;
-  }).join("");
+  $("guide-card").querySelector(".step-badge").textContent = items.length ? "Add a new network" : "Step 1";
+  $("network-list").innerHTML = items.map((d) => networkTile(d)).join("") +
+    `<button class="network-tile network-new" type="button" data-new>
+       <span class="net-icon net-icon-new">+</span>
+       <span class="net-body"><span class="net-name">Upload a new network</span>
+       <span class="net-meta">Add another Connections.csv</span></span>
+     </button>`;
+}
+
+async function loadEarlierUploads() {
+  const list = $("earlier-list");
+  showError("earlier-error", "");
+  try {
+    const items = await earlierUploads();
+    list.innerHTML = items.length
+      ? items.map((d) => networkTile(d, { action: "add" })).join("")
+      : `<p class="muted small">Nothing to add — every earlier network is already in someone's list.</p>`;
+  } catch (e) {
+    if (e instanceof AuthRequiredError) return showAuthScreen();
+    list.innerHTML = "";
+    showError("earlier-error", e.message || "Couldn't load earlier networks.");
+  }
 }
 
 function openNetwork(id, name) {
   setState({ datasetId: id, name, ready: false, step: 3 });
   beginEnrichment();   // a ready network comes back "ready" on the first Unified call → chat
+}
+
+async function addEarlier(id, name, btn) {
+  btn.disabled = true;
+  try {
+    await rememberDataset(id);
+    toast(`Added “${name}” to your networks`);
+    $("earlier-box").open = false;
+    await loadMyNetworks();
+  } catch (e) {
+    btn.disabled = false;
+    showError("earlier-error", e.message || "Couldn't add that network.");
+  }
 }
 
 // ---------- wiring ----------
@@ -246,26 +318,29 @@ function wire() {
   $("file-input").addEventListener("change", (e) => pickFile(e.target.files[0]));
   $("btn-retry").addEventListener("click", beginEnrichment);
   $("btn-reset").addEventListener("click", resetAll);
-  $("brand-home").addEventListener("click", (e) => { e.preventDefault(); show(state.ready ? 4 : state.step || 1); });
+  // Logo / product name = home: your networks + add a new one.
+  $("brand-home").addEventListener("click", (e) => {
+    e.preventDefault();
+    if (!user) return;
+    stopEnrichment?.();
+    clearInterval(elapsedTimer);
+    show(1);
+  });
 
   const dz = $("dropzone");
   ["dragenter", "dragover"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add("drag"); }));
   ["dragleave", "drop"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove("drag"); }));
   dz.addEventListener("drop", (e) => pickFile(e.dataTransfer.files[0]));
 
-  $("form-existing").addEventListener("submit", (e) => {
-    e.preventDefault();
-    const id = $("existing-id").value.trim();
-    if (!UUID_RE.test(id)) return showError("existing-error", "That isn't a valid dataset ID (UUID).");
-    showError("existing-error", "");
-    rememberDataset(id).catch(() => {});   // add it to "Your networks" (best effort)
-    setState({ datasetId: id, name: `Dataset ${id.slice(0, 8)}…`, ready: false, step: 3 });
-    beginEnrichment();   // Unified returns "ready" immediately if it's already enriched
-  });
-
   $("network-list").addEventListener("click", (e) => {
     const b = e.target.closest("[data-open]");
-    if (b) openNetwork(b.dataset.open, b.dataset.name);
+    if (b) return openNetwork(b.dataset.open, b.dataset.name);
+    if (e.target.closest("[data-new]")) { setState({ step: 2 }); show(2); }
+  });
+  $("earlier-box").addEventListener("toggle", () => { if ($("earlier-box").open) loadEarlierUploads(); });
+  $("earlier-list").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-add]");
+    if (b) addEarlier(b.dataset.add, b.dataset.name, b);
   });
   $("btn-signout").addEventListener("click", doSignOut);
 }
@@ -291,8 +366,8 @@ function enterApp(session) {
     getDatasetId: () => state.datasetId,
     storageKey: `ci.chat.v1:${user.id}`,
   });
-  if (state.datasetId && state.ready) openChat();
-  else if (state.datasetId) beginEnrichment();
+  // After login, land on home (your networks). Only an unfinished enrichment resumes on its own.
+  if (state.datasetId && !state.ready) beginEnrichment();
   else show(state.step === 2 ? 2 : 1);
 }
 

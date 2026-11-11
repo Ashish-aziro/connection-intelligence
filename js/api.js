@@ -72,7 +72,13 @@ export async function myDatasets() {
   return Array.isArray(r?.datasets) ? r.datasets : [];
 }
 
-/** Add a dataset (e.g. one entered by ID) to the signed-in user's list. */
+/** Networks uploaded earlier that nobody has in their list yet. */
+export async function earlierUploads() {
+  const r = await datasetFn({ action: "earlier_uploads" });
+  return Array.isArray(r?.datasets) ? r.datasets : [];
+}
+
+/** Add a dataset to the signed-in user's list. */
 export async function rememberDataset(datasetId) {
   return datasetFn({ action: "remember", dataset_id: datasetId });
 }

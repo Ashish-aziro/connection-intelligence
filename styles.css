@@ -350,3 +350,25 @@ code { background: #eef3f8; padding: 1px 6px; border-radius: 4px; font-size: .9e
   .auth-hero { padding: 28px 22px; }
   .user-email { display: none; }
 }
+
+/* ================= Home: network tiles ================= */
+.networks { margin-bottom: 20px; animation: rise .25s ease-out; }
+.networks-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.networks-head h2 { margin: 0 0 2px; font-size: 20px; color: var(--navy); }
+.networks-head p { margin: 0; }
+.network-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.network-grid.compact { margin-top: 12px; }
+.network-tile { display: flex; align-items: center; gap: 14px; text-align: left; width: 100%; cursor: pointer;
+  background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 16px; font: inherit; color: var(--text);
+  box-shadow: 0 1px 2px rgba(10,37,64,.04); transition: border-color .15s, box-shadow .15s, transform .15s; }
+.network-tile:hover { border-color: var(--orange); box-shadow: 0 8px 22px rgba(10,37,64,.10); transform: translateY(-2px); }
+.network-tile:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.network-tile:disabled { opacity: .6; cursor: progress; transform: none; }
+.net-icon { width: 48px; height: 48px; flex: none; border-radius: 12px; color: #fff; display: grid; place-items: center; }
+.net-icon-new { background: var(--orange-soft); color: var(--orange-dark); font-size: 26px; font-weight: 600; }
+.net-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.net-name { font-weight: 700; font-size: 15px; color: var(--navy); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.net-meta { font-size: 13px; color: var(--muted); }
+.net-go { flex: none; font-size: 18px; color: var(--muted); transition: color .15s, transform .15s; }
+.network-tile:hover .net-go { color: var(--orange); transform: translateX(3px); }
+.network-new { border-style: dashed; background: #fbfcfe; }

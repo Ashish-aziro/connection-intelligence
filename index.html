@@ -106,7 +106,18 @@
         <p class="lead">Ask things like <em>“who has Amazon experience and can mentor in software?”</em> and get ranked people from your own LinkedIn connections, with the reasons why.</p>
       </div>
 
-      <div class="card">
+      <!-- Networks this user has already used: shown as tiles, by name -->
+      <section class="networks hidden" id="my-networks" aria-labelledby="networks-title">
+        <div class="networks-head">
+          <div>
+            <h2 id="networks-title">Your networks</h2>
+            <p class="muted">Pick a network to search it. Ready ones open straight into search.</p>
+          </div>
+        </div>
+        <div class="network-grid" id="network-list"></div>
+      </section>
+
+      <div class="card" id="guide-card">
         <div class="card-head">
           <span class="step-badge">Step 1</span>
           <h2>Download your connections from LinkedIn</h2>
@@ -161,22 +172,11 @@
         </div>
       </div>
 
-      <div class="card my-networks hidden" id="my-networks">
-        <div class="card-head">
-          <span class="step-badge">Your networks</span>
-          <h2>Pick up where you left off</h2>
-          <p class="muted">Networks you've uploaded with this account. Ready ones open straight into search.</p>
-        </div>
-        <ul class="network-list" id="network-list"></ul>
-      </div>
-
-      <details class="card advanced">
-        <summary>Already enriched a dataset? Use its ID</summary>
-        <form id="form-existing" class="row">
-          <input id="existing-id" class="input" placeholder="e.g. b6101fe3-24d4-4d4a-a6df-26b96c8f2c09" autocomplete="off" spellcheck="false" />
-          <button class="btn btn-secondary" type="submit">Use this dataset</button>
-        </form>
-        <p class="error-text hidden" id="existing-error"></p>
+      <details class="card advanced" id="earlier-box">
+        <summary>Uploaded a network before you had an account? Add it here</summary>
+        <p class="muted small">Networks uploaded earlier that aren't in anyone's list yet. Adding one puts it in <b>Your networks</b>.</p>
+        <div class="network-grid compact" id="earlier-list"><p class="muted small">Loading…</p></div>
+        <p class="error-text hidden" id="earlier-error"></p>
       </details>
     </section>
 
@@ -257,7 +257,7 @@
 
         <p class="error-text hidden" id="enrich-error"></p>
         <div class="card-foot">
-          <span class="muted small">Dataset ID: <code id="enrich-dataset"></code></span>
+          <span class="muted small">Network: <b id="enrich-dataset"></b></span>
           <button class="btn btn-secondary hidden" id="btn-retry" type="button">Retry</button>
         </div>
       </div>
