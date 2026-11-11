@@ -37,7 +37,9 @@ function showAuthScreen(which = "view-auth") {
 
 function show(step) {
   ["view-auth", "view-reset"].forEach((id) => $(id).classList.add("hidden"));
-  $("stepper").classList.remove("hidden");
+  // The search workspace uses the full page width and drops the step bar.
+  document.querySelector(".shell").classList.toggle("wide", step === 4);
+  $("stepper").classList.toggle("hidden", step === 4);
   $("user-menu").classList.toggle("hidden", !user);
   if (step === 1) loadMyNetworks();
   document.querySelectorAll("[data-view]").forEach((v) => v.classList.toggle("hidden", Number(v.dataset.view) !== step));
@@ -297,8 +299,7 @@ function resetAll() {
   stopEnrichment?.();
   clearInterval(elapsedTimer);
   try { localStorage.removeItem(STORE); } catch { /* storage blocked */ }
-  chat.reset();
-  state = { step: 1 };
+  state = { step: 1 };   // saved searches stay with their network
   clearFile();
   show(1);
 }
@@ -358,13 +359,18 @@ function enterApp(session) {
   STORE = `ci.state.v1:${user.id}`;
   state = loadState();
   chat = createChat({
-    log: $("chat-log"),
+    pane: $("chat-log"),
     form: $("composer"),
     input: $("question"),
     button: $("btn-ask"),
     suggestions: $("suggestions"),
+    historyList: $("history-list"),
+    historyEmpty: $("history-empty"),
+    historyNetwork: $("history-network"),
+    newButton: $("history-new"),
     getDatasetId: () => state.datasetId,
-    storageKey: `ci.chat.v1:${user.id}`,
+    getNetworkName: () => displayName(),
+    userId: user.id,
   });
   // After login, land on home (your networks). Only an unfinished enrichment resumes on its own.
   if (state.datasetId && !state.ready) beginEnrichment();

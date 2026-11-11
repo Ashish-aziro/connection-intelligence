@@ -263,22 +263,37 @@
       </div>
     </section>
 
-    <!-- STEP 4: Chat -->
+    <!-- STEP 4: Search workspace — history on the left, ask box on top, results below -->
     <section class="panel hidden" id="view-4" data-view="4">
-      <div class="chat">
-        <div class="chat-log" id="chat-log" aria-live="polite"></div>
-        <div class="suggestions" id="suggestions">
-          <button class="chip" data-query="people with Amazon experience who can mentor in software">Amazon experience + can mentor</button>
-          <button class="chip" data-query="senior software engineers in Atlanta">Senior engineers in Atlanta</button>
-          <button class="chip" data-query="product managers at startups">PMs at startups</button>
-          <button class="chip" data-query="people who studied at Georgia Tech">Georgia Tech alumni</button>
-          <button class="chip" data-query="recruiters or hiring managers in tech">Recruiters in tech</button>
+      <div class="workspace">
+        <aside class="history" aria-label="Past searches">
+          <div class="history-head">
+            <div>
+              <b>Searches</b>
+              <span class="muted small" id="history-network"></span>
+            </div>
+            <button class="btn-text" id="history-new" type="button" title="Start a new search">+ New</button>
+          </div>
+          <ul class="history-list" id="history-list"></ul>
+          <p class="muted small history-empty" id="history-empty">Your past searches on this network will appear here.</p>
+        </aside>
+
+        <div class="ws-main">
+          <form class="composer composer-top" id="composer">
+            <textarea id="question" rows="1" maxlength="1000" placeholder="Ask about your network… e.g. who can introduce me to someone at Google?" required></textarea>
+            <button class="btn btn-primary" id="btn-ask" type="submit">Ask</button>
+          </form>
+          <p class="muted small ws-hint">Each search reads your whole network, so it can take up to a minute.</p>
+          <div class="suggestions" id="suggestions">
+            <span class="muted small">Try:</span>
+            <button class="chip" data-query="people with Amazon experience who can mentor in software">Amazon experience + can mentor</button>
+            <button class="chip" data-query="senior software engineers in Atlanta">Senior engineers in Atlanta</button>
+            <button class="chip" data-query="product managers at startups">PMs at startups</button>
+            <button class="chip" data-query="people who studied at Georgia Tech">Georgia Tech alumni</button>
+            <button class="chip" data-query="recruiters or hiring managers in tech">Recruiters in tech</button>
+          </div>
+          <div class="results-pane" id="chat-log" aria-live="polite"></div>
         </div>
-        <form class="composer" id="composer">
-          <textarea id="question" rows="1" maxlength="1000" placeholder="Ask about your network… e.g. who can introduce me to someone at Google?" required></textarea>
-          <button class="btn btn-primary" id="btn-ask" type="submit">Ask</button>
-        </form>
-        <p class="muted small center">Each search reads your whole network, so it can take up to a minute.</p>
       </div>
     </section>
   </main>
