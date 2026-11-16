@@ -17,6 +17,8 @@
  *     → every scored profile of a 05A search run, in 05A's rank order ("Load more")
  *   POST application/json  { action: "my_datasets" } / { action: "remember", dataset_id }
  *     → the signed-in user's networks (kept in their Auth app_metadata)
+ *   POST application/json  { action: "refine", run_ids: [parent..., child] }
+ *     → "search within": the child run's matches that were also matches in every parent run
  *   POST application/json  { action: "earlier_uploads" }
  *     → networks with profiles that no other user has in their list (to add by name)
  *
@@ -277,6 +279,97 @@ async function handleEarlierUploads(db: Db, user: AuthUser) {
   return json({ ok: true, datasets: out });
 }
 
+// ---------- shared: turn search_results rows into result items ----------
+const RESULT_COLS = "profile_id, final_bucket, rank_in_bucket, final_score, rule_score, llm_verdict, llm_reason, relaxations, evidence";
+type ResultRow = { profile_id: string; final_bucket?: string; rank_in_bucket: number; final_score: number | null;
+  rule_score: number | null; llm_verdict: string | null; llm_reason: string | null; relaxations: string[] | null; evidence: unknown };
+
+async function withProfiles(db: Db, rows: ResultRow[]) {
+  const ids = rows.map((r) => r.profile_id);
+  const f = new Map<string, Record<string, unknown>>();
+  for (let i = 0; i < ids.length; i += 200) {           // keep the IN (...) list a sane size
+    const { data } = await db.from("li_profile_features")
+      .select("profile_id, full_name, linkedin_url, current_title, current_company, location_text, seniority_label, years_experience")
+      .in("profile_id", ids.slice(i, i + 200));
+    for (const x of data ?? []) f.set(x.profile_id, x);
+  }
+  return rows.map((r) => {
+    const p = (f.get(r.profile_id) ?? {}) as Record<string, unknown>;
+    const evidence = Object.values((r.evidence ?? {}) as Record<string, { st?: string; txt?: string }>)
+      .filter((v) => v && v.st !== "na" && v.txt).map((v) => v.txt);
+    return {
+      rank: r.rank_in_bucket,
+      profile_id: r.profile_id,
+      full_name: p.full_name ?? null,
+      linkedin_url: p.linkedin_url ?? null,
+      current_title: p.current_title ?? null,
+      current_company: p.current_company ?? null,
+      location: p.location_text ?? null,
+      seniority: p.seniority_label ?? null,
+      years_experience: p.years_experience ?? null,
+      score: r.final_score ?? r.rule_score,
+      llm_verdict: r.llm_verdict,
+      llm_reason: r.llm_reason,
+      relaxations: r.relaxations ?? [],
+      evidence,
+    };
+  });
+}
+
+/** Every best/near row of a run (PostgREST caps a response at 1000 rows, so page). */
+async function matchedRows(db: Db, runId: string, cols = "profile_id") {
+  const out: Record<string, unknown>[] = [];
+  for (let from = 0; from < 20000; from += 1000) {
+    const { data, error } = await db.from("search_results").select(cols)
+      .eq("run_id", runId).in("final_bucket", ["best", "near"])
+      .order("profile_id").range(from, from + 999);
+    if (error) throw new Error(error.message);
+    out.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
+
+// ---------- "search within": keep a refinement inside its parent searches ----------
+const MAX_CHAIN = 10;
+
+/**
+ * body.run_ids = [root run, refinement 1, ..., newest refinement].
+ * A person is kept only if they are a best fit or near match in EVERY run of the
+ * chain; they are ranked and bucketed by the newest run.
+ */
+async function handleRefine(db: Db, body: Record<string, unknown>) {
+  const runIds = Array.isArray(body.run_ids) ? (body.run_ids as unknown[]).map((x) => String(x).trim()) : [];
+  if (runIds.length < 2 || runIds.length > MAX_CHAIN || !runIds.every((id) => UUID_RE.test(id))) {
+    return json({ ok: false, error: `run_ids must be 2–${MAX_CHAIN} search run UUIDs (parent first).` }, 400);
+  }
+  const parents = runIds.slice(0, -1);
+  const child = runIds[runIds.length - 1];
+
+  let within: Set<string> | null = null;
+  for (const run of parents) {
+    const ids = new Set((await matchedRows(db, run)).map((r) => String(r.profile_id)));
+    within = within ? new Set([...within].filter((id) => ids.has(id))) : ids;
+  }
+  const inside = within ?? new Set<string>();
+
+  const childRows = (await matchedRows(db, child, RESULT_COLS)) as unknown as ResultRow[];
+  const kept = childRows.filter((r) => inside.has(r.profile_id))
+    .sort((a, b) => (a.rank_in_bucket ?? 0) - (b.rank_in_bucket ?? 0));
+  const best = kept.filter((r) => r.final_bucket === "best");
+  const near = kept.filter((r) => r.final_bucket === "near");
+
+  return json({
+    ok: true,
+    run_ids: runIds,
+    within_total: inside.size,
+    best_total: best.length,
+    near_total: near.length,
+    best: await withProfiles(db, best),
+    near: await withProfiles(db, near),
+  });
+}
+
 // ---------- paging through every result of a search run ----------
 const MAX_PAGE = 200;
 
@@ -299,35 +392,7 @@ async function handleResults(db: Db, body: Record<string, unknown>) {
     return json({ ok: false, error: "Could not load more results." }, 500);
   }
 
-  const ids = (rows ?? []).map((r) => r.profile_id);
-  const { data: feats } = ids.length
-    ? await db.from("li_profile_features")
-        .select("profile_id, full_name, linkedin_url, current_title, current_company, location_text, seniority_label, years_experience")
-        .in("profile_id", ids)
-    : { data: [] };
-  const f = new Map((feats ?? []).map((x) => [x.profile_id, x]));
-
-  const items = (rows ?? []).map((r) => {
-    const p = f.get(r.profile_id) ?? {};
-    const evidence = Object.values((r.evidence ?? {}) as Record<string, { st?: string; txt?: string }>)
-      .filter((v) => v && v.st !== "na" && v.txt).map((v) => v.txt);
-    return {
-      rank: r.rank_in_bucket,
-      profile_id: r.profile_id,
-      full_name: p.full_name ?? null,
-      linkedin_url: p.linkedin_url ?? null,
-      current_title: p.current_title ?? null,
-      current_company: p.current_company ?? null,
-      location: p.location_text ?? null,
-      seniority: p.seniority_label ?? null,
-      years_experience: p.years_experience ?? null,
-      score: r.final_score ?? r.rule_score,
-      llm_verdict: r.llm_verdict,
-      llm_reason: r.llm_reason,
-      relaxations: r.relaxations ?? [],
-      evidence,
-    };
-  });
+  const items = await withProfiles(db, rows ?? []);
 
   return json({ ok: true, run_id: runId, bucket, offset, limit, total: count ?? null, items });
 }
@@ -380,6 +445,7 @@ Deno.serve(async (req) => {
     if (action === "results") return await handleResults(db, body);
     if (action === "my_datasets") return await handleMyDatasets(db, user);
     if (action === "earlier_uploads") return await handleEarlierUploads(db, user);
+    if (action === "refine") return await handleRefine(db, body);
     if (action === "remember") {
       const id = String(body.dataset_id ?? "").trim();
       if (!UUID_RE.test(id)) return json({ ok: false, error: "dataset_id must be a valid UUID." }, 400);

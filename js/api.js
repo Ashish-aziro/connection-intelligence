@@ -83,6 +83,11 @@ export async function rememberDataset(datasetId) {
   return datasetFn({ action: "remember", dataset_id: datasetId });
 }
 
+/** "Search within": matches of the last run that were also matches in every earlier run. */
+export async function refineResults(runIds) {
+  return datasetFn({ action: "refine", run_ids: runIds });
+}
+
 /** One page of a search run's results ("Load more"): { items, total }. */
 export async function moreResults(runId, bucket, offset, limit) {
   return datasetFn({ action: "results", run_id: runId, bucket, offset, limit });

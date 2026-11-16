@@ -133,7 +133,9 @@ export function renderResult(r, pageSize = 25) {
 
   const t = r.totals || {};
   const stats = [
-    t.profiles_scanned != null && `<div class="stat"><b>${esc(t.profiles_scanned)}</b><span>profiles scanned</span></div>`,
+    r.refined_within != null
+      ? `<div class="stat stat-within"><b>${esc(r.refined_within)}</b><span>people searched within</span></div>`
+      : t.profiles_scanned != null && `<div class="stat"><b>${esc(t.profiles_scanned)}</b><span>profiles scanned</span></div>`,
     `<div class="stat"><b>${esc(t.best_fit_total ?? (r.best_fit || []).length)}</b><span>best fits</span></div>`,
     `<div class="stat"><b>${esc(t.near_match_total ?? (r.near_matches || []).length)}</b><span>near matches</span></div>`,
   ].filter(Boolean).join("");
