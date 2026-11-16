@@ -158,7 +158,17 @@ function markPhase(phase) {
   });
 }
 
-function beginEnrichment() {
+function finishReady(delay = 900) {
+  clearInterval(elapsedTimer);
+  markPhase("ready");
+  $("progress-bar").style.width = "100%";
+  $("progress-label").textContent = "Done. Your network is ready.";
+  $("enrich-title").textContent = "Your network is ready";
+  setState({ ready: true, step: 4 });
+  setTimeout(openChat, delay);
+}
+
+async function beginEnrichment() {
   show(3);
   refreshName();
   $("enrich-dataset").textContent = displayName();
@@ -178,21 +188,27 @@ function beginEnrichment() {
   }, 1000);
 
   stopEnrichment?.();
+  stopEnrichment = null;
+
+  // Fast path: if the network is already enriched + search-ready, skip the Unified flow entirely.
+  const datasetId = state.datasetId;
+  $("progress-label").textContent = "Checking your network…";
+  try {
+    const st = await getStatus(datasetId);
+    if (state.datasetId !== datasetId) return;          // user moved on meanwhile
+    if (st?.search_ready) return finishReady(300);
+  } catch (e) {
+    if (e instanceof AuthRequiredError) return showAuthScreen();
+    /* otherwise fall through to the normal enrichment */
+  }
+
   stopEnrichment = startEnrichment(state.datasetId, {
     onProgress({ label, pct, phase }) {
       if (label) $("progress-label").textContent = label;
       if (pct) $("progress-bar").style.width = `${pct}%`;
       if (phase) markPhase(phase);
     },
-    onReady() {
-      clearInterval(elapsedTimer);
-      markPhase("ready");
-      $("progress-bar").style.width = "100%";
-      $("progress-label").textContent = "Done. Your network is ready.";
-      $("enrich-title").textContent = "Your network is ready";
-      setState({ ready: true, step: 4 });
-      setTimeout(openChat, 900);
-    },
+    onReady() { finishReady(); },
     onError(msg) {
       clearInterval(elapsedTimer);
       $("view-3").querySelector(".enrich").classList.add("stalled");
@@ -232,7 +248,7 @@ function networkTile(d, { action = "open" } = {}) {
     ? `<span class="pill pill-ready">Ready to search</span>`
     : `<span class="pill pill-progress">${esc(d.enriched)} of ${esc(d.total)} enriched</span>`;
   const attr = action === "add" ? "data-add" : "data-open";
-  return `<button class="network-tile" type="button" ${attr}="${esc(d.id)}" data-name="${esc(d.name)}" title="${esc(d.name)}">
+  return `<button class="network-tile" type="button" ${attr}="${esc(d.id)}" data-name="${esc(d.name)}" data-ready="${d.ready ? "1" : ""}" title="${esc(d.name)}">
       <span class="net-icon" style="background:${tileColor(d.name)}">${NETWORK_ICON}</span>
       <span class="net-body">
         <span class="net-name">${esc(d.name)}</span>
@@ -275,9 +291,14 @@ async function loadEarlierUploads() {
   }
 }
 
-function openNetwork(id, name) {
+function openNetwork(id, name, ready) {
+  if (ready) {
+    // Already enriched and search-ready (checked by the server when the tiles loaded): no Unified call.
+    setState({ datasetId: id, name, ready: true, step: 4 });
+    return openChat();
+  }
   setState({ datasetId: id, name, ready: false, step: 3 });
-  beginEnrichment();   // a ready network comes back "ready" on the first Unified call → chat
+  beginEnrichment();
 }
 
 async function addEarlier(id, name, btn) {
@@ -335,7 +356,7 @@ function wire() {
 
   $("network-list").addEventListener("click", (e) => {
     const b = e.target.closest("[data-open]");
-    if (b) return openNetwork(b.dataset.open, b.dataset.name);
+    if (b) return openNetwork(b.dataset.open, b.dataset.name, b.dataset.ready === "1");
     if (e.target.closest("[data-new]")) { setState({ step: 2 }); show(2); }
   });
   $("earlier-box").addEventListener("toggle", () => { if ($("earlier-box").open) loadEarlierUploads(); });

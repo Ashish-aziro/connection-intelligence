@@ -12,7 +12,7 @@
  *       returns { ok: true, reused: false, dataset_id, source_filename, source_bucket }
  *
  *   POST application/json  { action: "status", dataset_id }
- *     → returns { ok: true, dataset, profiles, queue } for the progress screen
+ *     → returns { ok: true, dataset, profiles, queue, search_ready } for the progress screen
  *   POST application/json  { action: "results", run_id, bucket: "best"|"near", offset, limit }
  *     → every scored profile of a 05A search run, in 05A's rank order ("Load more")
  *   POST application/json  { action: "my_datasets" } / { action: "remember", dataset_id }
@@ -119,6 +119,20 @@ async function queueStatus(db: Db, datasetId: string) {
   const q = Array.isArray(data) ? data[0] : data;
   const n = (k: string) => Number(q?.[k] ?? 0) || 0;
   return { completed: n("completed"), failed: n("failed"), pending: n("pending"), processing: n("processing"), total: n("total") };
+}
+
+/**
+ * Same "ready for search" signal the Unified flow uses: enrichment finished AND every
+ * enriched profile has its search embeddings (get_linkedin_embedding_status.ready).
+ * One fast database call, so already-enriched networks can open instantly.
+ */
+async function searchReady(db: Db, datasetId: string, q?: Awaited<ReturnType<typeof queueStatus>>) {
+  const qs = q ?? await queueStatus(db, datasetId);
+  if (!(qs.total > 0 && qs.pending === 0 && qs.processing === 0 && qs.completed > 0)) return false;
+  const { data, error } = await db.rpc("get_linkedin_embedding_status", { p_dataset_id: datasetId });
+  if (error) return false;
+  const st = typeof data === "string" ? JSON.parse(data) : data;
+  return st?.ok === true && st?.ready === true;
 }
 
 /** Best existing dataset for this fingerprint: a finished one first, else the furthest along. */
@@ -242,7 +256,7 @@ async function handleMyDatasets(db: Db, user: AuthUser) {
     if (!row) continue;
     const q = await queueStatus(db, id);
     datasets.push({ ...row, total: q.total, enriched: q.completed, unavailable: q.failed,
-      ready: q.total > 0 && q.pending === 0 && q.processing === 0 && q.completed > 0 });
+      ready: await searchReady(db, id, q) });
   }
   return json({ ok: true, datasets });
 }
@@ -274,7 +288,7 @@ async function handleEarlierUploads(db: Db, user: AuthUser) {
     const q = await queueStatus(db, row.id);
     if (q.total === 0) continue; // empty test datasets
     out.push({ ...row, total: q.total, enriched: q.completed, unavailable: q.failed,
-      ready: q.pending === 0 && q.processing === 0 && q.completed > 0 });
+      ready: await searchReady(db, row.id, q) });
   }
   return json({ ok: true, datasets: out });
 }
@@ -416,7 +430,7 @@ async function handleStatus(datasetId: string) {
   const { data: q, error: qErr } = await db.rpc("get_linkedin_enrichment_queue_status", { p_dataset_id: datasetId });
   if (!qErr) queue = q;
 
-  return json({ ok: true, dataset, profiles: profiles ?? 0, queue });
+  return json({ ok: true, dataset, profiles: profiles ?? 0, queue, search_ready: await searchReady(db, datasetId) });
 }
 
 Deno.serve(async (req) => {
