@@ -34,6 +34,21 @@ function fmt(n) {
   return Number.isFinite(x) ? (Math.round(x * 10) / 10).toString() : "";
 }
 
+// Verified facts from each company's own LinkedIn page (05A "companies").
+function companiesHtml(list) {
+  const cos = (Array.isArray(list) ? list : []).filter((c) => c && c.description).slice(0, 2);
+  if (!cos.length) return "";
+  return `<div class="company-facts">${cos.map((c) => {
+    const url = safeUrl(c.source_url);
+    const meta = [c.role, c.current ? "current" : "past", c.size && `${c.size} employees`, ...(c.industries || []).slice(0, 2)]
+      .filter(Boolean).map(esc).join(" · ");
+    const desc = String(c.description);
+    return `<p><b>${esc(c.name)}</b>${meta ? ` <span class="muted small">(${meta})</span>` : ""}:
+      ${esc(desc.length > 220 ? desc.slice(0, 219) + "…" : desc)}
+      ${url ? `<a class="cf-src" href="${esc(url)}" target="_blank" rel="noopener noreferrer">LinkedIn company page ↗</a>` : ""}</p>`;
+  }).join("")}</div>`;
+}
+
 function personCard(p, kind) {
   const url = safeUrl(p.linkedin_url);
   const name = esc(p.name || "(no name)");
@@ -59,6 +74,7 @@ function personCard(p, kind) {
       </div>
       ${meta ? `<div class="person-meta">${meta}</div>` : ""}
       ${p.why ? `<p class="why">${esc(p.why)}</p>` : ""}
+      ${companiesHtml(p.companies)}
       ${gap ? `<p class="gap"><strong>${kind === "near" ? "Gap" : "Note"}:</strong> ${esc(gap)}</p>` : ""}
       <div class="person-actions">
         ${url ? `<a class="btn-pill" href="${esc(url)}" target="_blank" rel="noopener noreferrer">View profile</a>` : ""}

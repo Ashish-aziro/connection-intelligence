@@ -1,5 +1,5 @@
 // "Enriched data" tab: browse what enrichment pulled for every connection.
-import { profilesPage } from "./api.js";
+import { profilesPage, researchCompanies, companyStatus } from "./api.js";
 import { esc } from "./render.js";
 
 const PAGE = 50;
@@ -86,6 +86,60 @@ export function createDataView({ list, more, summary, q, status, csvButton, coun
       <p class="muted small">What enrichment pulled for each connection in <b>${esc(getNetworkName() || "this network")}</b>. Click a person to see their experience, education and skills.</p>`;
   }
 
+  // ---------- company research (verified facts from each company's LinkedIn page) ----------
+  let researching = false, stopRequested = false;
+  const coBox = document.createElement("div");
+  coBox.className = "company-research";
+  summary.after(coBox);
+
+  function renderCompany(st, note = "") {
+    if (!st) { coBox.innerHTML = ""; return; }
+    const cur = Number(st.current_companies || 0), curDone = Number(st.current_researched || 0);
+    const all = Number(st.companies || 0), done = Number(st.researched || 0);
+    const pct = all ? Math.round((done / all) * 100) : 0;
+    coBox.innerHTML = `
+      <div class="cr-text">
+        <b>Company facts</b>
+        <span class="muted small">${all ? `${done.toLocaleString()} of ${all.toLocaleString()} companies researched from their LinkedIn pages
+          (${curDone.toLocaleString()} of ${cur.toLocaleString()} current employers)` : "Not started yet"}. Saved for everyone, so each company is only researched once.</span>
+        ${note ? `<span class="small cr-note">${esc(note)}</span>` : ""}
+      </div>
+      <div class="progress cr-bar"><div class="progress-bar" style="width:${pct}%"></div></div>
+      ${researching
+        ? `<button class="btn btn-secondary btn-sm" type="button" data-co-stop>Stop</button>`
+        : `<button class="btn btn-secondary btn-sm" type="button" data-co-start ${all && done >= all ? "disabled" : ""}>${all ? "Research remaining companies" : "Research companies"}</button>`}`;
+  }
+
+  async function loadCompanyStatus() {
+    try { const r = await companyStatus(getDatasetId()); renderCompany(r.status); }
+    catch { coBox.innerHTML = ""; }
+  }
+
+  async function runResearch() {
+    researching = true; stopRequested = false;
+    let first = true, st = null, note = "Researching… current employers first, 10 at a time.";
+    renderCompany(st || { companies: 0 }, note);
+    try {
+      while (!stopRequested) {
+        const r = await researchCompanies(getDatasetId(), { link: first });
+        first = false;
+        st = r.status;
+        if (r.error) { note = `Paused: ${r.error}`; break; }
+        if (!r.claimed) { note = "All companies researched."; break; }
+        renderCompany(st, `Researching… ${r.saved} saved in the last batch.`);
+      }
+      if (stopRequested) note = "Stopped. Click to continue later — finished companies are kept.";
+    } catch (e) { note = `Paused: ${e.message || "network error"}`; }
+    researching = false;
+    renderCompany(st, note);
+    if (!st) loadCompanyStatus();
+  }
+
+  coBox.addEventListener("click", (e) => {
+    if (e.target.closest("[data-co-start]")) runResearch();
+    if (e.target.closest("[data-co-stop]")) { stopRequested = true; e.target.disabled = true; e.target.textContent = "Stopping…"; }
+  });
+
   function renderMore() {
     const left = total - shown;
     more.innerHTML = left > 0
@@ -157,7 +211,7 @@ export function createDataView({ list, more, summary, q, status, csvButton, coun
   csvButton.addEventListener("click", downloadCsv);
 
   return {
-    open() { q.value = ""; status.value = ""; loadPage(true); },
+    open() { q.value = ""; status.value = ""; loadPage(true); loadCompanyStatus(); },
     /** Just refresh the count badge on the tab. */
     async peek() {
       try { const r = await profilesPage(getDatasetId(), { limit: 1 }); countBadge.textContent = r.summary?.enriched ? Number(r.summary.enriched).toLocaleString() : ""; }

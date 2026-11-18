@@ -4,7 +4,7 @@
 //  - "Refine" searches within a previous search's results; refinements are shown
 //    nested under their parent search, like folders.
 import { CONFIG } from "../config.js";
-import { search, moreResults, refineResults } from "./api.js";
+import { search, moreResults, refineResults, researchCompanies } from "./api.js";
 import { esc, renderResult, peopleHtml, loadMoreHtml, shapeExtraRow } from "./render.js";
 
 const THINKING_STEPS = [
@@ -201,6 +201,7 @@ export function createChat({ pane, form, input, button, suggestions, historyList
       const w = why.get(x.profile_id);
       if (w?.why) item.why = w.why;
       if (kind === "near" && w?.gap) item.gap = w.gap;
+      if (w?.companies) item.companies = w.companies;
       return item;
     });
     return {
@@ -214,6 +215,23 @@ export function createChat({ pane, form, input, button, suggestions, historyList
       suggested_next_searches: [],
       interpretation_notes: res.interpretation_notes || [],
     };
+  }
+
+  /**
+   * After a search, quietly research the companies (current and past) of the people it showed,
+   * so the next searches can describe those companies from their own LinkedIn pages.
+   * Results go to the shared company cache, reused by every user and network.
+   */
+  async function researchShown(datasetId, result) {
+    const ids = [...(result?.best_fit || []), ...(result?.near_matches || [])]
+      .map((x) => x.profile_id).filter(Boolean).slice(0, 40);
+    if (!ids.length) return;
+    try {
+      for (let i = 0; i < 6; i++) {                 // ≤60 company pages per search
+        const r = await researchCompanies(datasetId, { profileIds: ids, link: i === 0 });
+        if (!r?.ok || !r.claimed) break;
+      }
+    } catch { /* best effort: never disturbs the search */ }
   }
 
   async function run(e) {
@@ -240,6 +258,7 @@ export function createChat({ pane, form, input, button, suggestions, historyList
       e.nearCount = Number(result?.totals?.near_match_total ?? (result?.near_matches || []).length) || 0;
       e.status = "done";
       save();
+      researchShown(datasetId, result);   // background: verified company facts for the people shown
     } catch (err) {
       e.status = "error";
       e.error = err.message || "network error";

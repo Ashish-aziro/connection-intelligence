@@ -513,3 +513,16 @@ body:has(.shell.wide) .topbar-inner { max-width: none; padding: 0 28px; }
   .dr-detail { padding-left: 18px; }
   .dr-side { display: none; }
 }
+
+/* ================= Verified company facts ================= */
+.company-facts { margin: 6px 0 2px; display: grid; gap: 4px; }
+.company-facts p { margin: 0; font-size: 13px; color: #33475b; line-height: 1.45; background: #f7f9fc;
+  border-left: 3px solid var(--blue); padding: 6px 10px; border-radius: 4px; }
+.cf-src { margin-left: 6px; font-size: 12px; font-weight: 600; color: var(--blue); text-decoration: none; white-space: nowrap; }
+.cf-src:hover { text-decoration: underline; }
+.company-research { display: grid; grid-template-columns: 1fr auto; gap: 8px 14px; align-items: center;
+  border-top: 1px solid var(--line); padding-top: 12px; }
+.cr-text { display: flex; flex-direction: column; gap: 2px; }
+.cr-text b { color: var(--navy); }
+.cr-note { color: var(--orange-dark); font-weight: 600; }
+.cr-bar { grid-column: 1 / -1; height: 6px; }

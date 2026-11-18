@@ -88,6 +88,16 @@ export async function profilesPage(datasetId, { offset = 0, limit = 50, q = "", 
   return datasetFn({ action: "profiles", dataset_id: datasetId, offset, limit, q, status });
 }
 
+/** Research the next ≤10 LinkedIn company pages for a network (optionally only for some people). */
+export async function researchCompanies(datasetId, { profileIds = null, link = true } = {}) {
+  return datasetFn({ action: "research_companies", dataset_id: datasetId, profile_ids: profileIds, link });
+}
+
+/** Company research progress for a network. */
+export async function companyStatus(datasetId) {
+  return datasetFn({ action: "company_status", dataset_id: datasetId });
+}
+
 /** "Search within": matches of the last run that were also matches in every earlier run. */
 export async function refineResults(runIds) {
   return datasetFn({ action: "refine", run_ids: runIds });
