@@ -131,3 +131,13 @@ begin
   execute n;
 end
 $do$;
+
+-- Only the server (service role, used by the edge function and 05A) may call these.
+revoke all on function public.link_dataset_companies(uuid, uuid[]) from public, anon, authenticated;
+revoke all on function public.claim_li_company_research(uuid, int, uuid[]) from public, anon, authenticated;
+revoke all on function public.li_company_research_status(uuid) from public, anon, authenticated;
+revoke all on function public.li_company_facts(uuid) from public, anon, authenticated;
+grant execute on function public.link_dataset_companies(uuid, uuid[]) to service_role;
+grant execute on function public.claim_li_company_research(uuid, int, uuid[]) to service_role;
+grant execute on function public.li_company_research_status(uuid) to service_role;
+grant execute on function public.li_company_facts(uuid) to service_role;

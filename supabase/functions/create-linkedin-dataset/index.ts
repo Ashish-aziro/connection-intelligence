@@ -21,6 +21,8 @@
  *     → "search within": the child run's matches that were also matches in every parent run
  *   POST application/json  { action: "profiles", dataset_id, offset, limit, q?, status? }
  *     → the enriched profiles of one of the user's own networks (experience, education, skills)
+ *   POST application/json  { action: "research_companies", dataset_id, profile_ids? } / { action: "company_status", dataset_id }
+ *     → scrape the next <=10 LinkedIn company pages for a network (shared cache for all users)
  *   POST application/json  { action: "earlier_uploads" }
  *     → networks with profiles that no other user has in their list (to add by name)
  *
@@ -372,6 +374,144 @@ async function handleProfiles(db: Db, user: AuthUser, body: Record<string, unkno
   });
 }
 
+// ---------- verified company facts from LinkedIn company pages ----------
+// Companies are shared by every user and network (company_entities, keyed 'li:<page id>'):
+// a company researched once is reused everywhere and refreshed after COMPANY_TTL_DAYS.
+const COMPANY_ACTOR = "harvestapi~linkedin-company";
+const COMPANY_BATCH = 10;              // Apify Free plan: at most 10 items per run
+const COMPANY_TTL_DAYS = 180;
+
+function uniFromUrl(u: unknown) {
+  const m = String(u ?? "").toLowerCase().match(/linkedin\.com\/company\/([^/?#]+)/);
+  return m ? decodeURIComponent(m[1]) : "";
+}
+function hostOf(u: unknown) {
+  try { return new URL(String(u)).hostname.replace(/^www\./, ""); } catch { return null; }
+}
+function hqOf(c: Record<string, unknown>) {
+  const locs = Array.isArray(c.locations) ? c.locations as Record<string, unknown>[] : [];
+  const hq = locs.find((l) => l?.headquarter) ?? locs[0];
+  if (!hq) return null;
+  const parsed = (hq.parsed ?? {}) as Record<string, unknown>;
+  const parts = [parsed.city ?? hq.city, parsed.state ?? hq.geographicArea, parsed.country ?? hq.country].filter(Boolean);
+  return parts.length ? parts.join(", ") : (hq.description ? String(hq.description) : null);
+}
+
+async function scrapeCompanies(urls: string[]) {
+  const token = Deno.env.get("APIFY_TOKEN");
+  if (!token) throw new Error("APIFY_TOKEN secret is not set in Supabase (Edge Functions → Secrets).");
+  const res = await fetch(`https://api.apify.com/v2/acts/${COMPANY_ACTOR}/run-sync-get-dataset-items?timeout=120`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ companies: urls }),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Apify ${res.status}: ${text.slice(0, 200)}`);
+  const items = JSON.parse(text);
+  return Array.isArray(items) ? items as Record<string, unknown>[] : [];
+}
+
+async function saveCompany(db: Db, id: string, c: Record<string, unknown>) {
+  const industries = (Array.isArray(c.industries) ? c.industries : [])
+    .map((x) => (x && typeof x === "object" ? (x as Record<string, unknown>).name ?? (x as Record<string, unknown>).title : x))
+    .filter(Boolean).map(String);
+  const r = (c.employeeCountRange ?? {}) as Record<string, unknown>;
+  const range = r.start != null ? (r.end != null ? `${r.start}-${r.end}` : `${r.start}+`) : null;
+  const founded = Number((c.foundedOn as Record<string, unknown> | undefined)?.year ?? c.founded ?? NaN);
+  const now = new Date();
+  const patch: Record<string, unknown> = {
+    description: c.description ? String(c.description) : null,
+    industries,
+    employee_range: range,
+    headquarters: hqOf(c),
+    founded_year: Number.isFinite(founded) ? founded : null,
+    website_domain: hostOf(c.website),
+    company_facts: {
+      source: "linkedin_company_page",
+      url: c.linkedinUrl ?? null,
+      tagline: c.tagline ?? null,
+      company_type: c.companyType ?? null,
+      employee_count: c.employeeCount ?? null,
+      specialities: Array.isArray(c.specialities) ? c.specialities : [],
+      website: c.website ?? null,
+      scraped_at: now.toISOString(),
+    },
+    research_status: "completed",
+    research_confidence: 1,
+    research_error: null,
+    researched_at: now.toISOString(),
+    expires_at: new Date(now.getTime() + COMPANY_TTL_DAYS * 86400000).toISOString(),
+    updated_at: now.toISOString(),
+  };
+  if (c.name) patch.canonical_name = String(c.name);
+  const { error } = await db.from("company_entities").update(patch).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Research the next batch of companies for a network (or for specific people).
+ * body: { dataset_id, profile_ids?: uuid[], link?: boolean }
+ * Call repeatedly; each call scrapes at most COMPANY_BATCH company pages.
+ */
+async function handleResearchCompanies(db: Db, user: AuthUser, body: Record<string, unknown>) {
+  const datasetId = String(body.dataset_id ?? "").trim();
+  if (!UUID_RE.test(datasetId)) return json({ ok: false, error: "dataset_id must be a valid UUID." }, 400);
+  if (!ownsDataset(user, datasetId)) return json({ ok: false, error: "This network isn't in your list." }, 403);
+  const profileIds = Array.isArray(body.profile_ids)
+    ? (body.profile_ids as unknown[]).map(String).filter((x) => UUID_RE.test(x)).slice(0, 200) : null;
+
+  if (body.link !== false) {
+    const { error } = await db.rpc("link_dataset_companies", { p_dataset_id: datasetId, p_profile_ids: profileIds });
+    if (error) return json({ ok: false, error: `Linking failed: ${error.message}` }, 500);
+  }
+
+  const { data: claimed, error: claimErr } = await db.rpc("claim_li_company_research",
+    { p_dataset_id: datasetId, p_limit: COMPANY_BATCH, p_profile_ids: profileIds });
+  if (claimErr) return json({ ok: false, error: `Queue failed: ${claimErr.message}` }, 500);
+  const batch = (claimed ?? []) as { id: string; linkedin_url: string; canonical_name: string }[];
+
+  let saved = 0, missing = 0;
+  let scrapeError: string | null = null;
+  if (batch.length) {
+    try {
+      const items = await scrapeCompanies(batch.map((b) => b.linkedin_url));
+      const byUni = new Map<string, Record<string, unknown>>();
+      for (const it of items) {
+        const orig = (it.originalQuery ?? {}) as Record<string, unknown>;
+        for (const k of [uniFromUrl(orig.search), uniFromUrl(it.linkedinUrl), String(it.universalName ?? "").toLowerCase()]) {
+          if (k) byUni.set(k, it);
+        }
+      }
+      for (const b of batch) {
+        const it = byUni.get(uniFromUrl(b.linkedin_url));
+        if (it && (it.description || it.name)) { await saveCompany(db, b.id, it); saved++; }
+        else {
+          missing++;
+          await db.from("company_entities").update({ research_status: "li_failed",
+            research_error: "No LinkedIn company page data returned.", research_started_at: null,
+            updated_at: new Date().toISOString() }).eq("id", b.id);
+        }
+      }
+    } catch (e) {
+      scrapeError = String((e as Error).message ?? e);
+      // put the batch back in the queue (the attempt is already counted)
+      await db.from("company_entities").update({ research_status: "li_pending", research_started_at: null,
+        research_error: scrapeError.slice(0, 300) }).in("id", batch.map((b) => b.id));
+    }
+  }
+
+  const { data: status } = await db.rpc("li_company_research_status", { p_dataset_id: datasetId });
+  return json({ ok: !scrapeError, error: scrapeError, claimed: batch.length, saved, missing, status });
+}
+
+async function handleCompanyStatus(db: Db, user: AuthUser, body: Record<string, unknown>) {
+  const datasetId = String(body.dataset_id ?? "").trim();
+  if (!UUID_RE.test(datasetId)) return json({ ok: false, error: "dataset_id must be a valid UUID." }, 400);
+  if (!ownsDataset(user, datasetId)) return json({ ok: false, error: "This network isn't in your list." }, 403);
+  const { data } = await db.rpc("li_company_research_status", { p_dataset_id: datasetId });
+  return json({ ok: true, status: data });
+}
+
 // ---------- shared: turn search_results rows into result items ----------
 const RESULT_COLS = "profile_id, final_bucket, rank_in_bucket, final_score, rule_score, llm_verdict, llm_reason, relaxations, evidence";
 type ResultRow = { profile_id: string; final_bucket?: string; rank_in_bucket: number; final_score: number | null;
@@ -540,6 +680,8 @@ Deno.serve(async (req) => {
     if (action === "earlier_uploads") return await handleEarlierUploads(db, user);
     if (action === "refine") return await handleRefine(db, body);
     if (action === "profiles") return await handleProfiles(db, user, body);
+    if (action === "research_companies") return await handleResearchCompanies(db, user, body);
+    if (action === "company_status") return await handleCompanyStatus(db, user, body);
     if (action === "remember") {
       const id = String(body.dataset_id ?? "").trim();
       if (!UUID_RE.test(id)) return json({ ok: false, error: "dataset_id must be a valid UUID." }, 400);
