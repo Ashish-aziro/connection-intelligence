@@ -5,6 +5,7 @@ import { createChat } from "./chat.js";
 import { currentSession, onAuthChange, signOut } from "./auth.js";
 import { initLogin } from "./login.js";
 import { esc } from "./render.js";
+import { createDataView } from "./data.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -15,6 +16,8 @@ let selectedFile = null;
 let stopEnrichment = null;
 let elapsedTimer = null;
 let chat = null;
+let dataView = null;
+let dataLoadedFor = null;   // dataset whose enriched data is currently loaded in the Data tab
 let user = null;
 
 function loadState() {
@@ -158,14 +161,14 @@ function markPhase(phase) {
   });
 }
 
-function finishReady(delay = 900) {
+function finishReady(delay = 900, tab = "search") {
   clearInterval(elapsedTimer);
   markPhase("ready");
   $("progress-bar").style.width = "100%";
   $("progress-label").textContent = "Done. Your network is ready.";
   $("enrich-title").textContent = "Your network is ready";
   setState({ ready: true, step: 4 });
-  setTimeout(openChat, delay);
+  setTimeout(() => openChat(tab), delay);
 }
 
 async function beginEnrichment() {
@@ -208,7 +211,7 @@ async function beginEnrichment() {
       if (pct) $("progress-bar").style.width = `${pct}%`;
       if (phase) markPhase(phase);
     },
-    onReady() { finishReady(); },
+    onReady() { finishReady(900, "data"); },   // just enriched → show what was enriched
     onError(msg) {
       clearInterval(elapsedTimer);
       $("view-3").querySelector(".enrich").classList.add("stalled");
@@ -222,9 +225,26 @@ async function beginEnrichment() {
 }
 
 // ---------- step 4: chat ----------
-function openChat() {
+function openChat(tab = "search") {
   show(4);
   chat.open();
+  setTab(tab);
+  if (tab !== "data") dataView.peek();      // keep the tab's count badge fresh
+}
+
+// Workspace tabs: "Search" (05A) and "Enriched data" (what enrichment pulled).
+function setTab(tab) {
+  document.querySelectorAll(".ws-tab").forEach((b) => {
+    const on = b.dataset.tab === tab;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", String(on));
+  });
+  $("tab-search").classList.toggle("hidden", tab !== "search");
+  $("tab-data").classList.toggle("hidden", tab !== "data");
+  if (tab === "data" && dataLoadedFor !== state.datasetId) {
+    dataLoadedFor = state.datasetId;
+    dataView.open();
+  }
 }
 
 // ---------- home: the signed-in user's networks as tiles ----------
@@ -365,6 +385,7 @@ function wire() {
     if (b) addEarlier(b.dataset.add, b.dataset.name, b);
   });
   $("btn-signout").addEventListener("click", doSignOut);
+  document.querySelectorAll(".ws-tab").forEach((b) => b.addEventListener("click", () => setTab(b.dataset.tab)));
 }
 
 // ---------- boot: nothing is shown until we know who is signed in ----------
@@ -392,6 +413,17 @@ function enterApp(session) {
     getDatasetId: () => state.datasetId,
     getNetworkName: () => displayName(),
     userId: user.id,
+  });
+  dataView = createDataView({
+    list: $("data-list"),
+    more: $("data-more"),
+    summary: $("data-summary"),
+    q: $("data-q"),
+    status: $("data-status"),
+    csvButton: $("data-csv"),
+    countBadge: $("data-count"),
+    getDatasetId: () => state.datasetId,
+    getNetworkName: () => displayName(),
   });
   // After login, land on home (your networks). Only an unfinished enrichment resumes on its own.
   if (state.datasetId && !state.ready) beginEnrichment();

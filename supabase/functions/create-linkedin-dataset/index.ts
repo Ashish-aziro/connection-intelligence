@@ -19,6 +19,8 @@
  *     → the signed-in user's networks (kept in their Auth app_metadata)
  *   POST application/json  { action: "refine", run_ids: [parent..., child] }
  *     → "search within": the child run's matches that were also matches in every parent run
+ *   POST application/json  { action: "profiles", dataset_id, offset, limit, q?, status? }
+ *     → the enriched profiles of one of the user's own networks (experience, education, skills)
  *   POST application/json  { action: "earlier_uploads" }
  *     → networks with profiles that no other user has in their list (to add by name)
  *
@@ -293,6 +295,83 @@ async function handleEarlierUploads(db: Db, user: AuthUser) {
   return json({ ok: true, datasets: out });
 }
 
+// ---------- enriched data browser ----------
+const PROFILE_PAGE_MAX = 100;
+const STATUS_FILTERS = new Set(["completed", "failed", "pending", "processing"]);
+
+function ownsDataset(user: AuthUser, datasetId: string) {
+  const ds = user.app_metadata?.datasets;
+  return Array.isArray(ds) && (ds as string[]).includes(datasetId);
+}
+
+const dateText = (d: unknown) => (d && typeof d === "object" ? String((d as Record<string, unknown>).text ?? "") : "") || "";
+const clip = (v: unknown, n: number) => { const t = String(v ?? "").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
+
+function slimProfile(p: Record<string, unknown>) {
+  const exp = Array.isArray(p.experience) ? p.experience as Record<string, unknown>[] : [];
+  const edu = Array.isArray(p.education) ? p.education as Record<string, unknown>[] : [];
+  const skills = Array.isArray(p.skills) ? p.skills as unknown[] : [];
+  return {
+    id: p.id,
+    full_name: p.full_name,
+    linkedin_url: p.linkedin_url,
+    headline: p.headline,
+    current_title: p.current_title,
+    current_company: p.current_company,
+    location: p.location,
+    status: p.enrichment_status,
+    enriched_at: p.enriched_at,
+    error: p.enrichment_error,
+    experience: exp.slice(0, 15).map((e) => ({
+      title: e.position ?? null, company: e.companyName ?? null,
+      start: dateText(e.startDate), end: dateText(e.endDate), duration: e.duration ?? null,
+      location: e.location ?? null, type: e.employmentType ?? null, description: clip(e.description, 500) || null,
+    })),
+    education: edu.slice(0, 8).map((e) => ({
+      school: e.schoolName ?? null, degree: e.degree ?? null, field: e.fieldOfStudy ?? null,
+      start: dateText(e.startDate), end: dateText(e.endDate), period: e.period ?? null,
+    })),
+    skills: skills.slice(0, 40).map((x) => (x && typeof x === "object" ? (x as Record<string, unknown>).name : x))
+      .filter(Boolean).map((x) => String(x).trim()),
+  };
+}
+
+/** Page through a network's enriched profiles (only for networks in the user's own list). */
+async function handleProfiles(db: Db, user: AuthUser, body: Record<string, unknown>) {
+  const datasetId = String(body.dataset_id ?? "").trim();
+  if (!UUID_RE.test(datasetId)) return json({ ok: false, error: "dataset_id must be a valid UUID." }, 400);
+  if (!ownsDataset(user, datasetId)) {
+    return json({ ok: false, error: "This network isn't in your list. Add it from 'Your networks' first." }, 403);
+  }
+  const offset = Math.max(0, Math.floor(Number(body.offset ?? 0)) || 0);
+  const limit = Math.min(PROFILE_PAGE_MAX, Math.max(1, Math.floor(Number(body.limit ?? 50)) || 50));
+  const status = String(body.status ?? "").trim();
+  // keep the text search safe for PostgREST's or() syntax
+  const q = String(body.q ?? "").replace(/[,()*%\\.:"']/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+
+  let query = db.from("li_profiles")
+    .select("id, full_name, linkedin_url, headline, current_title, current_company, location, enrichment_status, enriched_at, enrichment_error, experience, education, skills",
+      { count: "exact" })
+    .eq("dataset_id", datasetId);
+  if (STATUS_FILTERS.has(status)) query = query.eq("enrichment_status", status);
+  if (q) {
+    const like = `%${q}%`;
+    query = query.or(`full_name.ilike.${like},headline.ilike.${like},current_title.ilike.${like},current_company.ilike.${like},location.ilike.${like}`);
+  }
+  const { data, error, count } = await query.order("full_name", { ascending: true, nullsFirst: false }).range(offset, offset + limit - 1);
+  if (error) {
+    console.error(JSON.stringify({ stage: "PROFILES", error: error.message }));
+    return json({ ok: false, error: "Could not load the enriched data." }, 500);
+  }
+
+  const qs = await queueStatus(db, datasetId);
+  return json({
+    ok: true, dataset_id: datasetId, offset, limit, total: count ?? 0,
+    summary: { total: qs.total, enriched: qs.completed, unavailable: qs.failed, pending: qs.pending + qs.processing },
+    items: (data ?? []).map((p) => slimProfile(p as Record<string, unknown>)),
+  });
+}
+
 // ---------- shared: turn search_results rows into result items ----------
 const RESULT_COLS = "profile_id, final_bucket, rank_in_bucket, final_score, rule_score, llm_verdict, llm_reason, relaxations, evidence";
 type ResultRow = { profile_id: string; final_bucket?: string; rank_in_bucket: number; final_score: number | null;
@@ -460,6 +539,7 @@ Deno.serve(async (req) => {
     if (action === "my_datasets") return await handleMyDatasets(db, user);
     if (action === "earlier_uploads") return await handleEarlierUploads(db, user);
     if (action === "refine") return await handleRefine(db, body);
+    if (action === "profiles") return await handleProfiles(db, user, body);
     if (action === "remember") {
       const id = String(body.dataset_id ?? "").trim();
       if (!UUID_RE.test(id)) return json({ ok: false, error: "dataset_id must be a valid UUID." }, 400);

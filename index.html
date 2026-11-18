@@ -279,6 +279,12 @@
         </aside>
 
         <div class="ws-main">
+          <div class="ws-tabs" role="tablist">
+            <button class="ws-tab active" type="button" role="tab" data-tab="search" aria-selected="true">Search</button>
+            <button class="ws-tab" type="button" role="tab" data-tab="data" aria-selected="false">Enriched data <span class="ws-tab-count" id="data-count"></span></button>
+          </div>
+
+          <div class="ws-panel" id="tab-search">
           <form class="composer composer-top" id="composer">
             <textarea id="question" rows="1" maxlength="1000" placeholder="Ask about your network… e.g. who can introduce me to someone at Google?" required></textarea>
             <button class="btn btn-primary" id="btn-ask" type="submit">Ask</button>
@@ -293,6 +299,25 @@
             <button class="chip" data-query="recruiters or hiring managers in tech">Recruiters in tech</button>
           </div>
           <div class="results-pane" id="chat-log" aria-live="polite"></div>
+          </div>
+
+          <div class="ws-panel hidden" id="tab-data">
+            <div class="data-head result-card">
+              <div class="data-summary" id="data-summary"></div>
+              <div class="data-tools">
+                <input class="input" id="data-q" type="search" placeholder="Filter by name, title, company or location" autocomplete="off" />
+                <select class="input" id="data-status" aria-label="Enrichment status">
+                  <option value="">All profiles</option>
+                  <option value="completed">Enriched</option>
+                  <option value="failed">Unavailable</option>
+                  <option value="pending">Waiting</option>
+                </select>
+                <button class="btn btn-secondary btn-sm" id="data-csv" type="button">Download CSV</button>
+              </div>
+            </div>
+            <div class="data-list" id="data-list"></div>
+            <div class="load-more" id="data-more"></div>
+          </div>
         </div>
       </div>
     </section>

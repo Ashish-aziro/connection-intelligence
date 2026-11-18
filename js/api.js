@@ -83,6 +83,11 @@ export async function rememberDataset(datasetId) {
   return datasetFn({ action: "remember", dataset_id: datasetId });
 }
 
+/** One page of a network's enriched profiles: { items, total, summary }. */
+export async function profilesPage(datasetId, { offset = 0, limit = 50, q = "", status = "" } = {}) {
+  return datasetFn({ action: "profiles", dataset_id: datasetId, offset, limit, q, status });
+}
+
 /** "Search within": matches of the last run that were also matches in every earlier run. */
 export async function refineResults(runIds) {
   return datasetFn({ action: "refine", run_ids: runIds });
