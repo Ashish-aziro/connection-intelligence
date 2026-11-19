@@ -58,7 +58,7 @@ begin
     raise notice 'claim_linkedin_profiles already reuses enriched profiles';
     return;
   end if;
-  n := regexp_replace(d, '(BEGIN\s+)(RETURN QUERY)', '\1PERFORM public.reuse_enriched_profiles(p_dataset_id);\n    \2', 'i');
+  n := regexp_replace(d, '(BEGIN\s+)(RETURN QUERY)', '\1PERFORM public.reuse_enriched_profiles(p_dataset_id); \2', 'i');
   if n = d then raise exception 'claim_linkedin_profiles anchor not found - left unchanged'; end if;
   execute n;
 end
