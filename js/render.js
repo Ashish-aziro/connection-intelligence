@@ -70,7 +70,7 @@ function personCard(p, kind) {
           <h4>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${name}</a>` : name}</h4>
           ${sub ? `<p class="person-sub">${sub}</p>` : ""}
         </div>
-        ${p.score != null ? `<div class="score ${scoreClass(p.score)}" title="Match score">${esc(fmt(p.score))}</div>` : ""}
+        ${p.score != null ? `<div class="score ${scoreClass(p.score)}" title="Match score">${esc(fmt(p.score))}%</div>` : ""}
       </div>
       ${meta ? `<div class="person-meta">${meta}</div>` : ""}
       ${p.why ? `<p class="why">${esc(p.why)}</p>` : ""}
