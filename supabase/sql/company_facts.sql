@@ -90,32 +90,40 @@ returns jsonb language sql stable security definer set search_path = public as $
 $$;
 
 -- Verified facts (only from the company's own LinkedIn page) for one person's jobs.
+-- One entry per company (a person's current role there wins), current employers first, max 6.
 create or replace function public.li_company_facts(p_profile_id uuid)
 returns jsonb language sql stable security definer set search_path = public as $$
-  select coalesce(jsonb_agg(f order by (f->>'current')::boolean desc, (f->>'idx')::int), '[]'::jsonb)
+  select coalesce(jsonb_agg(t.f order by t.cur desc, t.idx), '[]'::jsonb)
   from (
-    select jsonb_build_object(
-      'name', c.canonical_name,
-      'role', l.title,
-      'current', l.is_current,
-      'idx', l.experience_index,
-      'dates', nullif(concat_ws(' – ', l.start_date, l.end_date), ''),
-      'description', left(c.description, 400),
-      'industries', to_jsonb(c.industries),
-      'size', c.employee_range,
-      'website', c.website_domain,
-      'source', 'LinkedIn company page',
-      'source_url', c.linkedin_url) as f
-    from public.li_profile_company_links l
-    join public.company_entities c on c.id = l.company_id
-    where l.profile_id = p_profile_id
-      and c.normalized_name like 'li:%'
-      and c.research_status = 'completed'
-      and c.company_facts->>'source' = 'linkedin_company_page'
-    order by l.is_current desc, l.experience_index
+    select d.f, d.cur, d.idx
+    from (
+      select distinct on (c.id)
+        l.is_current as cur, l.experience_index as idx,
+        jsonb_build_object(
+          'name', c.canonical_name,
+          'role', l.title,
+          'current', l.is_current,
+          'dates', nullif(concat_ws(' – ', l.start_date, l.end_date), ''),
+          'description', left(c.description, 400),
+          'industries', to_jsonb(c.industries),
+          'size', c.employee_range,
+          'website', c.website_domain,
+          'source', 'LinkedIn company page',
+          'source_url', c.linkedin_url) as f
+      from public.li_profile_company_links l
+      join public.company_entities c on c.id = l.company_id
+      where l.profile_id = p_profile_id
+        and c.normalized_name like 'li:%'
+        and c.research_status = 'completed'
+        and c.company_facts->>'source' = 'linkedin_company_page'
+      order by c.id, l.is_current desc, l.experience_index
+    ) d
+    order by d.cur desc, d.idx
     limit 6
-  ) s;
+  ) t;
 $$;
+revoke all on function public.li_company_facts(uuid) from public, anon, authenticated;
+grant execute on function public.li_company_facts(uuid) to service_role;
 
 -- Patch the live finalize_search_run so every result item carries "companies".
 do $do$
